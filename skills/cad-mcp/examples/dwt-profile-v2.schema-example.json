@@ -1,0 +1,61 @@
+{
+  "schema_version": "2.0",
+  "profile_id": "generic-mm-dwt-baseline",
+  "name": "通用毫米 DWT 安全基线示例",
+  "standard_references": [],
+  "drawing_settings": {
+    "insertion_units": "millimeters",
+    "measurement_system": "metric",
+    "linear_unit_format": "decimal",
+    "linear_precision": 2,
+    "angular_unit_format": "decimal_degrees",
+    "angular_precision": 2,
+    "associative_dimensions": true,
+    "mirror_text": false,
+    "display_lineweights": true,
+    "current_layer": "0",
+    "current_layout": "Model"
+  },
+  "layer_styles": {
+    "0": {
+      "state": "present",
+      "rename_from": null,
+      "color": 7,
+      "linetype": "CONTINUOUS",
+      "lineweight": 25,
+      "plot": true,
+      "description": "通用基础层",
+      "locked": false,
+      "frozen": false,
+      "transparency": 0,
+      "require_empty": true,
+      "allow_nonempty": false
+    }
+  },
+  "text_styles": {},
+  "dimension_styles": {},
+  "linetype_settings": {
+    "ltscale": 1.0,
+    "celtscale": 1.0,
+    "msltscale": 0,
+    "psltscale": 1
+  },
+  "plot_policy": {
+    "target_mode": "ctb",
+    "expected_current_mode": null,
+    "required_style_sheets": [],
+    "preferred_device": null,
+    "allow_mode_conversion": false
+  },
+  "page_setups": {},
+  "layouts": {},
+  "block_library": {
+    "sources": []
+  },
+  "metadata": {
+    "example_only": true,
+    "compatible_server_version": "1.4.0",
+    "save_policy": "MCP应用并校验后保持图纸打开，由用户在AutoCAD中手动另存为DWT",
+    "resource_note": "本示例故意不声明字体、CTB、PC3、纸张和DWG块库；正式配置必须先用当前AutoCAD实际资源补齐并核验"
+  }
+}

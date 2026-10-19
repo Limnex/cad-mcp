@@ -1,0 +1,47 @@
+{
+  "schema_version": "1.0",
+  "source_dwg": "C:\\CAD\\verified-block-library.dwg",
+  "source_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "blocks": [
+    {
+      "name": "PUMP_SYMBOL",
+      "fingerprint_quantization": 0.001,
+      "expected_fingerprint": null,
+      "connection_tolerance": 0.01,
+      "symmetry_tests": [
+        {
+          "id": "horizontal-axis",
+          "kind": "reflection",
+          "tolerance": 0.01,
+          "axis_point": [0.0, 0.0, 0.0],
+          "axis_direction": [1.0, 0.0, 0.0],
+          "center": null,
+          "order": null
+        }
+      ],
+      "checks": [
+        {
+          "id": "block-size",
+          "path": "/geometry/bounding_box/size",
+          "operator": "within",
+          "expected": [100.0, 60.0, 0.0],
+          "tolerance": 0.01
+        },
+        {
+          "id": "layers",
+          "path": "/properties/layers",
+          "operator": "unordered_equals",
+          "expected": ["EQUIPMENT"],
+          "tolerance": null
+        },
+        {
+          "id": "entity-count",
+          "path": "/properties/entity_count_recursive",
+          "operator": "range",
+          "expected": {"min": 1, "max": 500},
+          "tolerance": null
+        }
+      ]
+    }
+  ]
+}

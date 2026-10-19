@@ -1,0 +1,85 @@
+# 使用指南
+
+## 选择模式
+
+默认模式为 `acad`，用于原生 DWG。首次使用前先手动打开 AutoCAD；不使用 AutoCAD 时，
+可显式选择 `dxf`。模式配置在 MCP 服务下次启动时读取，当前会话用 `cad_switch_mode` 切换。
+
+`dxf` 模式适合无需 AutoCAD 的文件生成和基础编辑。`acad` 模式通过 Windows COM 操作
+已经运行的 AutoCAD，用于原生 DWG、布局、视口、页面设置、打印资源和关联字段。
+
+```powershell
+cad-mcp config set mode acad
+# 需要独立生成 DXF 时再使用：
+# cad-mcp config set mode dxf
+cad-mcp config show
+```
+
+切换默认配置不会替代会话内的状态检查。每次开始前都应调用
+`cad_health(reconnect=false)`，确认当前模式、连接、活动文档和最近错误编号。
+
+## Codex 桌面端安全启动
+
+在 Codex 桌面端使用 `acad` 模式时，按以下顺序操作：
+
+1. 手动启动 AutoCAD，等待主界面完全加载。
+2. 保存或关闭不希望 MCP 修改的图纸，确认当前活动窗口。
+3. 调用 `cad_health(reconnect=false)`；不要用 `reconnect=true` 冷启动 AutoCAD。
+4. 确认 AutoCAD 已运行后，再切换到 `acad` 模式。
+5. 使用 MCP 打开已有图纸或新建图纸，重新确认活动文档。
+6. 执行绘制、检查、保存等后续操作。
+
+如果 AutoCAD 尚未运行，应停止 `acad` 操作并提示用户手动打开，而不是连续重试。作者
+通过 `cc-haha` 使用本 MCP 时暂未复现相同崩溃，但仍建议在重要工作中采用上述顺序。
+
+## DXF 基础流程
+
+1. `cad_health(reconnect=false)`。
+2. 新建或打开 DXF。
+3. 设置图层、文字和尺寸样式。
+4. 绘制或修改实体。
+5. 查询关键实体并检查几何范围。
+6. 执行 `cad_check_drawing`。
+7. 保存文件并确认输出路径。
+
+## AutoCAD 基础流程
+
+1. 按“Codex 桌面端安全启动”手动打开 AutoCAD。
+2. 健康检查并确认活动图纸。
+3. 新建或打开工作图纸。
+4. 写入前建立只读基线；重要配置先预览或 dry-run。
+5. 写操作使用撤销组，发生关键错误后停止，不连续尝试修改。
+6. 保存前执行 `cad_check_drawing`。
+7. 用户要求保留窗口时，不关闭 AutoCAD 或当前图纸。
+
+## 打开指定路径的图纸
+
+`cad_open_drawing` 的 `filename` 可传受控图纸目录中的单个文件名，也可传现有本机图纸的盘符绝对路径，例如 `D:\项目\总图.dwg`。DXF 模式只接受 `.dxf`；acad 模式接受 `.dwg` 和 `.dxf`。不支持 UNC 网络路径、相对子路径或 `..` 回退。绝对路径只对“打开”生效；新建和另存为仍限定在受控目录。
+
+打开不会自动保存。若在目录外图纸上显式调用 `cad_save_drawing`，DWG 和 DXF 模式下的 DXF 会写回原文件；acad 模式打开 DXF 后则在同目录生成 DWG，目标已存在时停止。保存前先核对目标路径并执行 `cad_check_drawing`。
+
+## 创建注释性块
+
+`cad_make_block` 可选传入 `annotative=true`，在 `acad` 模式把指定模型空间实体建为 AutoCAD 原生注释性块。成功响应除原有 `message` 外，还返回 `annotative=true`、`verified=true` 和 `readback`；回读包括块内实体数、原生注释性标记与源实体移除状态。命令使用指定基点并避免对象捕捉改变基点；失败时触发当前操作的撤销组回滚。
+
+省略 `annotative` 等同于 `false`，旧建块行为不变。`dxf` 模式传 `true` 会在任何写入前返回 `UNSUPPORTED_MODE`。此开关只属于 `cad_make_block`，不改变 `cad_insert_block` 或 `cad_create_or_update_attribute_block` 的行为；插块时手动缩放不能代替原生注释性。
+
+## DWT 与环境工程工作流
+
+DraftingProfile 2.0 和环境工程语义模型必须先校验、再预览，展示冲突与未支持项并获得
+用户确认后才能正式应用。固定图框不得缩放，模板源文件保持只读，打印资源必须根据当前
+AutoCAD 的真实 PC3、纸张和 CTB/STB 列表核验。
+
+详细调用顺序见内置 Skill 的
+[`references/workflows.md`](../skills/cad-mcp/references/workflows.md)，参数与
+返回字段见
+[`references/tool-contracts.md`](../skills/cad-mcp/references/tool-contracts.md)。
+
+## 保存与故障停止
+
+失败时读取结构化错误中的 `code`、`operation`、`retryable`、`hint` 和 `request_id`。
+只有 `retryable=true` 且健康检查确认文件状态正常时，才考虑用相同参数重试。回滚和撤销组
+不能替代文件备份。
+
+日志默认位于 `~/.cad-mcp/logs/cad_mcp.log`。排查启动崩溃和连接问题见
+[故障排查](troubleshooting.md)。

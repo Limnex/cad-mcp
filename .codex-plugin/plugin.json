@@ -1,0 +1,25 @@
+{
+  "name": "cad-mcp",
+  "version": "1.5.3",
+  "description": "Create, inspect, and modify DXF and AutoCAD drawings through a local MCP server.",
+  "author": {
+    "name": "CAD MCP Contributors"
+  },
+  "license": "MIT",
+  "keywords": ["cad", "dxf", "autocad", "mcp"],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "CAD MCP",
+    "shortDescription": "Local DXF and AutoCAD drawing tools",
+    "longDescription": "Create, inspect, validate, and modify DXF or AutoCAD drawings with reusable CAD workflows.",
+    "developerName": "CAD MCP Contributors",
+    "category": "Productivity",
+    "capabilities": ["Read", "Write"],
+    "defaultPrompt": [
+      "Check the CAD environment before editing a drawing.",
+      "Create a DXF drawing from a structured plan.",
+      "Validate the current drawing before saving it."
+    ]
+  }
+}

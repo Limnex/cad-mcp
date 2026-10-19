@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "cad-mcp": {
+      "type": "stdio",
+      "command": "cad-mcp",
+      "args": []
+    }
+  }
+}

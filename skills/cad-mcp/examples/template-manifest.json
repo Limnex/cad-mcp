@@ -1,0 +1,9 @@
+{
+  "source_file": "template.dwg",
+  "sha256": "REPLACE_WITH_VERIFIED_SHA256",
+  "paper": {"name": "A3", "width": 420, "height": 297},
+  "usable_area": {"min": [20, 20], "max": [400, 277]},
+  "field_anchors": [],
+  "table_regions": [],
+  "blocks": []
+}

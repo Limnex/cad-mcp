@@ -1,0 +1,14 @@
+{
+  "facilities": [
+    {"id": "tank_01", "type": "tank", "geometry": {"kind": "rectangle", "width": 1000, "height": 600}}
+  ],
+  "nodes": [
+    {"id": "outlet_01", "type": "outlet", "position": [1200, 300]}
+  ],
+  "pipes": [
+    {"id": "pipe_01", "from": "tank_01", "to": "outlet_01", "diameter": 100}
+  ],
+  "annotations": [],
+  "tables": [],
+  "views": []
+}

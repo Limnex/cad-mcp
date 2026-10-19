@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "local-cad-mcp"
+version = "1.5.3"
+description = "Local dual-backend CAD MCP server for DXF and AutoCAD DWG workflows"
+readme = { text = "CAD MCP local server package. See the repository README for installation and usage.", content-type = "text/markdown" }
+requires-python = ">=3.11,<3.15"
+license = "MIT"
+dependencies = [
+    "mcp==1.29.0",
+    "ezdxf==1.4.4",
+    "pywin32==312; platform_system == 'Windows'",
+    "pydantic==2.13.4",
+]
+
+[project.scripts]
+cad-mcp = "cad_mcp.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[dependency-groups]
+dev = [
+    "pytest==9.1.1",
+]
+
+[tool.uv]
+package = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q --strict-markers --basetemp=.cache/pytest/tmp"
+cache_dir = ".cache/pytest/cache"
+markers = [
+    "acad: integration tests that may open AutoCAD; excluded from the default suite",
+]
