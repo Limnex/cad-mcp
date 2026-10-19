@@ -20,8 +20,9 @@ import sys
 from pathlib import Path
 from typing import Optional, Literal, List, Tuple, Dict, Any
 
-from pydantic import BaseModel, Field, ConfigDict, model_validator
+from pydantic import BaseModel, Field, ConfigDict, ValidationError, model_validator
 from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.exceptions import ToolError
 
 from cad_mcp.config import load_settings
 from cad_mcp.drawing.document import (
@@ -1436,7 +1437,7 @@ class QueryEntitiesInput(ToolInput):
     layer: Optional[str] = Field(default=None, description="图层过滤；留空不过滤", max_length=40)
     entity_type: Optional[str] = Field(default=None, description="实体类型过滤，如 LINE/CIRCLE/AcDbLine", max_length=40)
     offset: int = Field(default=0, description="从模型空间索引开始扫描", ge=0)
-    limit: int = Field(default=50, description="最多返回数量；分页可避免长时间 COM 扫描", ge=1, le=100)
+    limit: int = Field(default=50, description="可选，默认 50，范围 1–100；继续分页必须使用返回的 next_offset", ge=1, le=100)
     include_bounds: bool = Field(default=False, description="是否读取每个实体包围盒；会增加 COM 调用")
 
 
@@ -3641,6 +3642,11 @@ async def _gateway_call(params: GatewayCallParams) -> str:
         return _fail(ValueError(f"未知 CAD 工具: {params.tool_name}"))
     try:
         result = await tool.run(params.arguments)
+    except ToolError as exc:
+        # FastMCP wraps validation failures; preserve their original type/fields.
+        if isinstance(exc.__cause__, ValidationError):
+            return _fail(exc.__cause__)
+        return _fail(exc)
     except Exception as exc:
         return _fail(exc)
     if isinstance(result, str):
@@ -3671,21 +3677,21 @@ def _configure_tool_exposure() -> None:
         _gateway_list,
         name="cad_gateway_list",
         title="列出 CAD 工具",
-        description="列出完整 CAD MCP 工具目录，可按名称或标题过滤。",
+        description="列出原始 CAD 工具目录，可按名称或标题过滤；调用前用 cad_gateway_describe 查看必填项、可选项和限制。网关工具本身应直接调用，不通过 cad_gateway_call 调用。",
         structured_output=False,
     )
     mcp.add_tool(
         _gateway_describe,
         name="cad_gateway_describe",
         title="查看 CAD 工具 Schema",
-        description="返回一个原始 CAD 工具的参数 Schema、描述和注解。",
+        description="返回原始工具的完整 inputSchema：required 必填字段、default 默认值、类型、minimum/maximum 范围及未知字段限制。先查看规范，再按原结构调用。",
         structured_output=False,
     )
     mcp.add_tool(
         _gateway_call,
         name="cad_gateway_call",
         title="调用 CAD 工具",
-        description="在同一 CAD MCP 进程内按名称调用原始 CAD 工具。",
+        description='按名称调用原始 CAD 工具。先用 cad_gateway_describe 查参数规范；arguments 必须包含原工具的 params，例如 {"tool_name":"cad_health","arguments":{"params":{"reconnect":false}}}，不能把 reconnect 等参数直接放在 arguments 顶层。',
         structured_output=False,
     )
 

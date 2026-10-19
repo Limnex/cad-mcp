@@ -24,7 +24,9 @@
 - 确认 AutoCAD 已由用户手动打开。
 - 确认当前任务加载了 `cad-mcp@cad-mcp` 插件。
 - 先使用 `cad_health(reconnect=false)` 读取状态。
+- `connected=false` 不表示 AutoCAD 未运行。用户已明确 CAD 打开并要求操作图纸时，可直接连接已有实例；运行状态未知时先向用户确认。
 - 在 Codex 桌面端发现 AutoCAD 未运行时，不使用 `reconnect=true`。
+- 后端不再回退到启动新实例；找不到可连接实例时返回 `PRECONDITION_FAILED`，检查现有实例和权限，不循环重试。
 - 检查 `cad-mcp config show` 的默认模式是否符合预期。
 
 ## 日志与错误编号

@@ -25,8 +25,8 @@ cad-mcp config show
 1. 手动启动 AutoCAD，等待主界面完全加载。
 2. 保存或关闭不希望 MCP 修改的图纸，确认当前活动窗口。
 3. 调用 `cad_health(reconnect=false)`；不要用 `reconnect=true` 冷启动 AutoCAD。
-4. 确认 AutoCAD 已运行后，再切换到 `acad` 模式。
-5. 使用 MCP 打开已有图纸或新建图纸，重新确认活动文档。
+4. 用户已明确 CAD 打开并要求操作图纸时，可直接连接已有实例，无须额外确认。`connected=false` 只表示 MCP 未连接；CAD 是否打开未知时先向用户确认。
+5. 使用 MCP 按完整路径复用并绑定已打开图纸，或打开指定图纸后绑定，或新建图纸；随后核对文档。找不到现有 CAD 实例时停止，不自动启动新实例。
 6. 执行绘制、检查、保存等后续操作。
 
 如果 AutoCAD 尚未运行，应停止 `acad` 操作并提示用户手动打开，而不是连续重试。作者
@@ -76,6 +76,25 @@ AutoCAD 的真实 PC3、纸张和 CTB/STB 列表核验。
 [`references/tool-contracts.md`](../skills/cad-mcp/references/tool-contracts.md)。
 
 ## 保存与故障停止
+
+现有 `cad_get_drawing_info`、`cad_list_layers_detailed`、`cad_query_entities` 和
+`cad_check_drawing` 的 AutoCAD 扫描共用 30 秒协作式耗时上限，并在长扫描中处理消息。
+超时或关键 COM 读取失败时停止，不将部分结果当作完整查询。此上限在 COM 调用之间
+检查，也约束忙碌重试；无法强行打断永不返回的单次原生 COM 调用。
+
+断线检查忽略最多 `1e-9 mm` 的数值噪声，且该阈值不超过查询容差的百万分之一；
+真实小间隙以有效数字显示，不再四舍五入为 `0.0 mm`。检查不会吸附或修改图元。
+
+网关模式先直接调用 `cad_gateway_list` 和 `cad_gateway_describe`，读取现有工具的
+`inputSchema`：`required`、默认值、类型和范围。再调用 `cad_gateway_call`，例如：
+
+```json
+{"tool_name":"cad_query_entities","arguments":{"params":{"limit":100,"offset":0}}}
+```
+
+下一页使用返回的 `next_offset`。`cad_query_entities.limit` 范围是 1–100；不要套用
+其他列举接口的 500 上限。参数错误返回 `INVALID_ARGUMENT`，错误详情包含字段位置和
+限制，不会进入绘图操作；网关工具自身应直接调用，不放进 `cad_gateway_call`。
 
 失败时读取结构化错误中的 `code`、`operation`、`retryable`、`hint` 和 `request_id`。
 只有 `retryable=true` 且健康检查确认文件状态正常时，才考虑用相同参数重试。回滚和撤销组

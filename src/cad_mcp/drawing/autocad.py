@@ -17,6 +17,8 @@ import os
 import re
 import time
 import uuid
+from contextvars import ContextVar
+from functools import wraps
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Sequence, Tuple
 
@@ -52,6 +54,7 @@ from cad_mcp.engineering.templates import (
     sha256_file,
 )
 from cad_mcp.core.runtime import (
+    CadMcpError,
     ConflictError,
     UnsupportedOperationError,
     health_metadata,
@@ -168,6 +171,50 @@ _LOCK_MUTEX = None
 #   RPC_E_TIMEOUT                0x8001011F 调用超时
 _RETRY_HRESULTS = {0x80010001, 0x80010108, 0x8001010A, 0x8001011F}
 
+# A cooperative deadline bounds the whole scan, including individual COM retries.
+# It cannot interrupt a single native COM call that never returns.
+_COM_SCAN_TIMEOUT = 30.0
+_COM_SCAN_STATE = ContextVar("cad_com_scan_state", default=None)
+
+
+def _check_com_scan_deadline() -> None:
+    state = _COM_SCAN_STATE.get()
+    if state is not None and time.monotonic() >= state[0]:
+        raise TimeoutError(
+            f"AutoCAD {state[1]} 扫描未完成：已达到整体耗时上限，"
+            "已停止；未返回不完整结果")
+
+
+def _raise_scan_transport_error(exc: Exception) -> None:
+    """Optional unsupported properties stay unverified; a lost/busy server must stop."""
+    if isinstance(exc, TimeoutError):
+        raise exc
+    if isinstance(exc, pythoncom.com_error):
+        hr = getattr(exc, "hresult", None)
+        if hr is not None and (hr & 0xFFFFFFFF) in (
+            _RETRY_HRESULTS | {0x800706BA, 0x800401FD}
+        ):
+            raise exc
+
+
+def _bounded_com_scan(method):
+    @wraps(method)
+    def bounded(self, *args, **kwargs):
+        state = (time.monotonic() + _COM_SCAN_TIMEOUT, method.__name__)
+        parent = _COM_SCAN_STATE.get()
+        if parent is not None and parent[0] < state[0]:
+            state = parent
+        token = _COM_SCAN_STATE.set(state)
+        try:
+            _check_com_scan_deadline()
+            result = method(self, *args, **kwargs)
+            _check_com_scan_deadline()
+            return result
+        finally:
+            _COM_SCAN_STATE.reset(token)
+
+    return bounded
+
 
 def _is_com_object(obj) -> bool:
     """判断返回值是否为 pywin32 COM 对象（有 _oleobj_ 属性）。"""
@@ -198,8 +245,11 @@ class _ComRetryProxy:
     def _retry(self, fn):
         """执行 COM 操作（方法调用或属性读取），AutoCAD 忙时等待并重试。"""
         for attempt in range(8):
+            _check_com_scan_deadline()
             try:
-                return fn()
+                result = fn()
+                _check_com_scan_deadline()
+                return result
             except pythoncom.com_error as e:
                 hr = getattr(e, "hresult", None)
                 if hr is not None and (hr & 0xFFFFFFFF) in self._retryable_hr:
@@ -210,7 +260,7 @@ class _ComRetryProxy:
                     time.sleep(min(0.05 * (2 ** attempt), 1.5))
                     continue
                 raise
-        raise RuntimeError("AutoCAD 持续拒绝 COM 调用（服务器忙），请稍后再试")
+        raise TimeoutError("AutoCAD 持续拒绝 COM 调用（服务器忙），请稍后再试")
 
     def __getattr__(self, name):
         obj = object.__getattribute__(self, "_obj")
@@ -345,15 +395,20 @@ class AcadBackend(AcadDwtMixin):
         # 判断真正空闲，最多轮询 60 秒。
         ready = False
         for _ in range(30):
+            _check_com_scan_deadline()
             try:
                 state = acad.GetAcadState()
                 if state.IsQuiescent:
                     _ = acad.Documents.Count
                     ready = True
                     break
+            except TimeoutError:
+                raise
             except Exception:
                 pass
+            _check_com_scan_deadline()
             time.sleep(2)
+        _check_com_scan_deadline()
         if not ready:
             raise RuntimeError("实例未就绪")
 
@@ -428,6 +483,12 @@ class AcadBackend(AcadDwtMixin):
             pass
         time.sleep(0.03)
 
+    def _scan_checkpoint(self, index: int) -> None:
+        _check_com_scan_deadline()
+        if index > 0 and index % 25 == 0:
+            self._yield_com()
+            _check_com_scan_deadline()
+
     def _send_command_and_wait(self, command: str, timeout: float = 20.0) -> None:
         """只发送一次 AutoCAD 命令，并等待命令队列确实执行完毕。"""
         self.doc.SendCommand(command)
@@ -457,28 +518,25 @@ class AcadBackend(AcadDwtMixin):
         except Exception:
             return None
 
-    def _start_acad(self):
-        """按原方法启动新的 AutoCAD 实例。"""
-        return win32com.client.Dispatch("AutoCAD.Application")
-
     def _connect(self):
-        """连接本地 AutoCAD（已打开则复用，未启动则自动启动），并确保窗口可见。
-
-        健康检查：已有连接失效（进程被杀/实例异常）时自动重连；
-        若连接到不可用实例（如关闭最后文档后 COM 接口损坏），退出坏实例并启动全新实例。
-        注：操作级锁由 MCP 层的锁代理在调用前后获取/释放，这里只负责建立连接。
-        """
+        """只复用已经运行的 AutoCAD；连接失败不启动或关闭任何实例。"""
         if self.acad is not None:
             try:
                 _ = self.acad.Documents.Count   # 探活
                 return self.acad
+            except TimeoutError:
+                raise
             except Exception:
                 self.acad = None
                 self.doc = None
                 self.msp = None
         acad = self._attach_existing_acad()
         if acad is None:
-            acad = self._start_acad()
+            raise CadMcpError(
+                "未找到可连接的已运行 AutoCAD 实例；未启动新实例",
+                code="PRECONDITION_FAILED",
+                hint="若 CAD 是否打开未知，先向用户确认；已打开时检查实例和权限，不自动冷启动",
+            )
         try:
             self._wait_acad_ready(acad)
             try:
@@ -487,12 +545,9 @@ class AcadBackend(AcadDwtMixin):
                 pass
             self.acad = _ComRetryProxy(acad)   # 包装：所有后续 COM 调用自动重试
             return self.acad
+        except TimeoutError:
+            raise
         except Exception:
-            try:
-                if acad is not None and self._attach_existing_acad() is None:
-                    acad.Quit()             # 仅清理本次新启动且不可用的实例
-            except Exception:
-                pass
             self.acad = None
             self.doc = None
             self.msp = None
@@ -504,6 +559,8 @@ class AcadBackend(AcadDwtMixin):
         if self.doc is not None:
             try:
                 _ = self.msp.Count
+            except TimeoutError:
+                raise
             except Exception:
                 self.doc = None
                 self.msp = None
@@ -1020,15 +1077,19 @@ class AcadBackend(AcadDwtMixin):
                 "source_dwg": manifest.source_dwg,
                 "sheet_ids": [sheet.id for sheet in manifest.sheets]}
 
+    @_bounded_com_scan
     def get_info(self) -> str:
         """当前文档信息。"""
         if self.doc is None:
             return "当前未连接 AutoCAD"
         layers = []
-        for i in range(self.doc.Layers.Count):
-            layers.append(self.doc.Layers.Item(i).Name)
+        layer_collection = self.doc.Layers
+        for i in range(int(layer_collection.Count)):
+            self._scan_checkpoint(i)
+            layers.append(layer_collection.Item(i).Name)
         counts: Dict[str, int] = {}
-        for i in range(self.msp.Count):
+        for i in range(int(self.msp.Count)):
+            self._scan_checkpoint(i)
             n = self.msp.Item(i).EntityName
             counts[n] = counts.get(n, 0) + 1
         fname = self.current_path.name if self.current_path else "当前 AutoCAD 文档"
@@ -1065,47 +1126,45 @@ class AcadBackend(AcadDwtMixin):
             "acad", raw, current_layer, current_layout
         )
 
+    @_bounded_com_scan
     def list_layers_detailed(self) -> Dict[str, Any]:
         """只读列出 AutoCAD 图层和数据库级实体引用数量。"""
 
         self._check_doc()
         counts: Dict[str, int] = {}
-        counts_reliable = True
-        try:
-            for block_index in range(self.doc.Blocks.Count):
-                block = self.doc.Blocks.Item(block_index)
-                for entity_index in range(block.Count):
-                    try:
-                        name = str(block.Item(entity_index).Layer).casefold()
-                        counts[name] = counts.get(name, 0) + 1
-                    except Exception:
-                        counts_reliable = False
-        except Exception:
-            counts_reliable = False
+        blocks = self.doc.Blocks
+        scanned = 0
+        for block_index in range(int(blocks.Count)):
+            self._scan_checkpoint(block_index)
+            block = blocks.Item(block_index)
+            for entity_index in range(int(block.Count)):
+                self._scan_checkpoint(scanned)
+                name = str(block.Item(entity_index).Layer).casefold()
+                counts[name] = counts.get(name, 0) + 1
+                scanned += 1
 
         try:
             current = str(self.doc.ActiveLayer.Name)
-        except Exception:
+        except Exception as exc:
+            _raise_scan_transport_error(exc)
             current = None
         unverified: List[str] = []
         layers: List[Dict[str, Any]] = []
-        for index in range(self.doc.Layers.Count):
-            layer = self.doc.Layers.Item(index)
+        layer_collection = self.doc.Layers
+        for index in range(int(layer_collection.Count)):
+            self._scan_checkpoint(index)
+            layer = layer_collection.Item(index)
             name = str(layer.Name)
 
             def read(field: str, fn):
                 try:
                     return fn()
-                except Exception:
+                except Exception as exc:
+                    _raise_scan_transport_error(exc)
                     unverified.append(f"layers.{name}.{field}")
                     return None
 
-            entity_count: Optional[int]
-            if counts_reliable:
-                entity_count = counts.get(name.casefold(), 0)
-            else:
-                entity_count = None
-                unverified.append(f"layers.{name}.entity_count")
+            entity_count = counts.get(name.casefold(), 0)
             layers.append({
                 "name": name,
                 "color": read("color", lambda: int(layer.Color)),
@@ -3103,6 +3162,7 @@ class AcadBackend(AcadDwtMixin):
         e.Mirror(_pt(x1, y1), _pt(x2, y2))
         return f"已镜像图元 {handle}（镜像线 {x1},{y1} - {x2},{y2}）"
 
+    @_bounded_com_scan
     def check_drawing(self, tolerance: Optional[float] = None) -> str:
         """图面体检：扫描重叠图元、疑似断线、空图层。tolerance 容差留空自动按图纸范围算。"""
         self._check_doc()
@@ -3121,14 +3181,19 @@ class AcadBackend(AcadDwtMixin):
         tol = tolerance
         lines, circles = [], []
         used_layers = set()
-        for i in range(self.msp.Count):
+        for i in range(entity_count):
+            self._scan_checkpoint(i)
             e = self.msp.Item(i)
             try:
                 used_layers.add(e.Layer)
+            except (TimeoutError, pythoncom.com_error):
+                raise
             except Exception:
                 pass
             try:
                 name = e.EntityName
+            except (TimeoutError, pythoncom.com_error):
+                raise
             except Exception:
                 continue
             try:
@@ -3138,12 +3203,16 @@ class AcadBackend(AcadDwtMixin):
                 elif name == "AcDbCircle":
                     c, r = e.Center, e.Radius
                     circles.append((self._handle_str(e.Handle), (c[0], c[1]), r))
+            except (TimeoutError, pythoncom.com_error):
+                raise
             except Exception:
                 continue
         scan = scan_line_circle_issues(lines, circles, tol)
         issues = list(scan["issues"])
-        for i in range(self.doc.Layers.Count):
-            n = self.doc.Layers.Item(i).Name
+        layer_collection = self.doc.Layers
+        for i in range(int(layer_collection.Count)):
+            self._scan_checkpoint(i)
+            n = layer_collection.Item(i).Name
             if n == "Defpoints":
                 continue
             if n not in used_layers:
@@ -3384,6 +3453,7 @@ class AcadBackend(AcadDwtMixin):
         self.doc.Regen(1)
         return f"已设置全局线型比例 {scale}"
 
+    @_bounded_com_scan
     def query_entities(self, layer: Optional[str] = None,
                        entity_type: Optional[str] = None,
                        offset: int = 0, limit: int = 50,
@@ -3395,16 +3465,18 @@ class AcadBackend(AcadDwtMixin):
         rows = []
         i = min(offset, total)
         while i < total and len(rows) < limit:
+            self._scan_checkpoint(i - offset)
             e = self.msp.Item(i)
             kind = str(e.EntityName)
-            if ((not layer or str(e.Layer) == layer)
+            entity_layer = str(e.Layer)
+            if ((not layer or entity_layer == layer)
                     and (not wanted or kind.lower() == wanted
                          or kind.lower().removeprefix("acdb") == wanted.removeprefix("acdb"))):
                 row = {
                     "index": i,
                     "handle": self._handle_str(e.Handle),
                     "type": kind,
-                    "layer": str(e.Layer),
+                    "layer": entity_layer,
                 }
                 if include_bounds:
                     try:
@@ -3413,12 +3485,11 @@ class AcadBackend(AcadDwtMixin):
                             "min": [float(mn[0]), float(mn[1])],
                             "max": [float(mx[0]), float(mx[1])],
                         }
-                    except Exception:
+                    except Exception as exc:
+                        _raise_scan_transport_error(exc)
                         row["bounds"] = None
                 rows.append(row)
             i += 1
-            if i % 25 == 0:
-                self._yield_com()
         return {
             "entities": rows,
             "offset": offset,

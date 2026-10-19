@@ -226,6 +226,10 @@ def record_error(exc: Exception, operation: str) -> Dict[str, Any]:
     }
     if isinstance(exc, CadMcpError) and exc.details:
         result["details"] = exc.details
+    if isinstance(exc, ValidationError):
+        result.setdefault("details", {})["validation_errors"] = exc.errors(
+            include_url=False, include_context=False, include_input=False,
+        )
     rollback_status = getattr(exc, "rollback_status", None)
     if rollback_status is not None:
         result.setdefault("details", {})["rollback_status"] = rollback_status

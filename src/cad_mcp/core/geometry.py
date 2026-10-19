@@ -136,6 +136,8 @@ def scan_line_circle_issues(lines, circles, tolerance: float) -> Dict[str, objec
     tol = float(tolerance)
     if not math.isfinite(tol) or tol <= 0:
         raise ValueError("图面检查容差必须是大于 0 的有限数值")
+    # Ignore only numerical noise, never the user's whole search tolerance.
+    connection_epsilon = min(1e-9, tol * 1e-6)
     issues: List[str] = []
     comparisons = 0
     complete = True
@@ -211,10 +213,10 @@ def scan_line_circle_issues(lines, circles, tolerance: float) -> Dict[str, objec
                     math.hypot(end[0] - other_start[0], end[1] - other_start[1]),
                     math.hypot(end[0] - other_end[0], end[1] - other_end[1]),
                 )
-                if 0 < distance <= tol:
+                if connection_epsilon < distance <= tol:
                     if not record(
                         f"[断线] 线 {other_handle} 与线 {handle} 端点相距 "
-                        f"{distance:.1f}mm，可能未接上（容差 {tol:.1f}mm）"):
+                        f"{distance:.6g}mm，可能未接上（容差 {tol:.6g}mm）"):
                         break
             if not complete:
                 break
