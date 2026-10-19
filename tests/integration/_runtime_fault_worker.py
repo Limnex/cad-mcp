@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import Counter
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -182,7 +183,7 @@ def graph_scenario(kind, directory):
     })
 
 
-def hanging_scenario(directory):
+def hanging_scenario(directory, *, serve=False):
     raw, meter, _expected = make_graph("hang", directory)
     autocad._COM_SCAN_TIMEOUT = 0.1
 
@@ -191,13 +192,46 @@ def hanging_scenario(directory):
 
         @property
         def Count(self):
-            emit({"event": "entered_blocking_call", "scan_budget_seconds": 0.1})
+            if serve:
+                (directory / "blocking-call-entered").write_text("entered", encoding="utf-8")
+            else:
+                emit({"event": "entered_blocking_call", "scan_budget_seconds": 0.1})
             # Represents a native call which never hands control back to Python.
             threading.Event().wait()
 
     raw.doc._obj.Blocks = NeverReturningCollection()
+    if serve:
+        from cad_mcp.worker import serve as run_worker
+
+        run_worker(server)
+        return
     result = server.cad_list_layers_detailed(server.ListLayersDetailedInput())
     emit({"event": "unexpected_return", "response": result})
+
+
+def isolated_fault_worker(kind, directory):
+    raw, _meter, _expected = make_graph("complete", directory)
+    raw._begin_undo = lambda: False
+
+    def failed_call(*_args, **_kwargs):
+        with (directory / "simulated-actions").open("a", encoding="utf-8") as stream:
+            stream.write("applied\n")
+        if "crash" in kind:
+            os._exit(24)
+        threading.Event().wait()
+
+    def bind(filename):
+        raw.current_path = Path(filename).resolve()
+        return "bound simulated document"
+
+    raw.open_drawing = bind
+    if kind == "isolated-read-crash-worker":
+        raw.get_info = failed_call
+    else:
+        raw.draw_line = failed_call
+    from cad_mcp.worker import serve
+
+    serve(server)
 
 
 SERVICE_CODE = """
@@ -295,6 +329,10 @@ if __name__ == "__main__":
     directory = Path(sys.argv[2])
     if scenario == "crash":
         crash_scenario(directory)
+    elif scenario == "isolated-hang-worker":
+        hanging_scenario(directory, serve=True)
+    elif scenario in {"isolated-write-hang-worker", "isolated-write-crash-worker", "isolated-read-crash-worker"}:
+        isolated_fault_worker(scenario, directory)
     elif scenario == "hang":
         hanging_scenario(directory)
     else:

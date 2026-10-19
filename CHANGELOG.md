@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Attach only to an already running AutoCAD instance; do not start or quit AutoCAD implicitly.
+- Bound AutoCAD scans and busy retries, stop on interrupted reads, and preserve validation error details through gateway calls.
+- Ignore floating-point endpoint noise and display real small gaps without rounding them to zero; do not modify geometry during checks.
+- Execute stdio tools serially in a persistent worker monitored by the parent process, preserving existing tool schemas and state between calls. Bound startup, execution, queue waits, and blocked input pipes; terminate only the owned worker on failure and never replay failed requests.
+- Mark unacknowledged writes as `EXECUTION_UNKNOWN`, prevent further writes/save/close/quit/mode changes, and require manual CAD inspection followed by an MCP restart. Reconnection does not establish rollback or remove the restriction; worker loss invalidates bindings, caches, tokens, and unsaved DXF memory state.
+- Add isolated fault simulations, full/gateway stdio coverage, and an opt-in roundtrip against an already running AutoCAD; document cached health diagnostics and recovery limits.
+
 - Default unconfigured sessions to AutoCAD/DWG (`acad`); preserve explicit DXF selection and configuration override precedence.
 
 - Flatten the single-plugin repository: package metadata, source, tests, and skills now live at the repository root.

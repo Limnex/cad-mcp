@@ -1,0 +1,55 @@
+"""Exercise the production MCP entry point, schemas and persistent worker state."""
+
+import asyncio
+import json
+import os
+import sys
+
+import pytest
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+
+
+@pytest.mark.parametrize("toolset", ["all", "webcodex"])
+def test_production_stdio_executes_tools_in_persistent_worker(tmp_path, toolset):
+    environment = os.environ.copy()
+    environment.update({"CAD_MODE": "dxf", "CAD_DRAWINGS_DIR": str(tmp_path / "drawings"),
+                        "CAD_LOG_DIR": str(tmp_path / "logs"), "CAD_MCP_TOOLSET": toolset,
+                        "PYTHONIOENCODING": "utf-8", "PYTHONDONTWRITEBYTECODE": "1"})
+    parameters = StdioServerParameters(command=sys.executable, args=["-B", "-m", "cad_mcp"], env=environment)
+
+    async def verify():
+        async with stdio_client(parameters) as (reader, writer):
+            async with ClientSession(reader, writer) as session:
+                await session.initialize()
+                tools = await session.list_tools()
+                assert len(tools.tools) == (101 if toolset == "all" else 3)
+
+                async def call(name, params):
+                    if toolset == "webcodex":
+                        name, params = "cad_gateway_call", {"tool_name": name, "arguments": {"params": params}}
+                    result = await session.call_tool(name, {"params": params})
+                    assert result.isError is False
+                    return json.loads(result.content[0].text)
+
+                created = await call("cad_new_drawing", {"filename": "stdio-state.dxf"})
+                assert created["ok"] is True
+                drawn = await call("cad_draw_line", {"x1": 0, "y1": 0, "x2": 10, "y2": 0})
+                assert drawn["ok"] is True
+                queried = await call("cad_query_entities", {"limit": 10})
+                assert queried["ok"] is True
+                assert len(queried["entities"]) == 1
+                health = await call("cad_health", {})
+                assert health["document_open"] is True
+                assert health["worker"]["generation"] == 1
+                assert health["worker"]["write_result_unknown"] is False
+                if toolset == "webcodex":
+                    for invalid_arguments in ({}, {"params": None}, {"params": {"unexpected": 1}}):
+                        result = await session.call_tool("cad_gateway_call", {"params": {
+                            "tool_name": "cad_health", "arguments": invalid_arguments}})
+                        assert result.isError is False
+                        invalid = json.loads(result.content[0].text)
+                        assert invalid["ok"] is False
+                        assert invalid["error_detail"]["code"] == "INVALID_ARGUMENT"
+
+    asyncio.run(asyncio.wait_for(verify(), timeout=30))

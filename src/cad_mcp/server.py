@@ -3701,7 +3701,13 @@ _configure_tool_exposure()
 
 def main() -> None:
     """Run the CAD MCP server over stdio."""
-    mcp.run()
+    from cad_mcp.core.isolation import install_isolated_execution
+
+    supervisor = install_isolated_execution(mcp, _FULL_TOOL_REGISTRY, mode=_SETTINGS.mode)
+    try:
+        mcp.run()
+    finally:
+        supervisor.close()
 
 
 if __name__ == "__main__":

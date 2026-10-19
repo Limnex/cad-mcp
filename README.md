@@ -76,6 +76,8 @@ codex plugin list
 详细流程见 [使用指南](docs/usage.md)。冷启动崩溃和日志排查见
 [故障排查](docs/troubleshooting.md)。
 
+stdio 服务使用常驻工作进程执行工具，主进程监控超时；单次调用永久阻塞时，只清理自有工作进程，保留 AutoCAD。写入失去响应会标记为“结果未知”并阻止后续写操作，需人工核对 CAD 后重启 MCP；这不代表 CAD 操作已中止或回滚。恢复步骤见[使用指南](docs/usage.md#保存与故障停止)，异常模拟方法见[开发与验证](docs/development.md#异常模拟与进程隔离验证)。
+
 ## 配置
 
 ```powershell

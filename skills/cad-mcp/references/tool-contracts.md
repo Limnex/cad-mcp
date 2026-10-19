@@ -4,7 +4,7 @@
 
 ## 调用前
 
-- `cad_health`：确认连接状态、当前模式、活动文档、服务端/Python 版本、后端能力和最近错误编号。默认 `reconnect=false`，不得启动或重连 AutoCAD；只有明确传入 `reconnect=true` 时才允许连接。
+- `cad_health`：读取连接状态、当前模式、活动文档、服务端/Python 版本、后端能力和最近错误编号。默认 `reconnect=false`，不主动连接 AutoCAD；`reconnect=true` 只连接已运行的实例，不启动新实例。stdio 服务执行繁忙或尚无工作进程时，默认健康检查可由主进程直接返回缓存诊断；`file`、`last_known_document_open` 不能证明 CAD 当前可用，`ok: true` 只表示诊断成功返回。
 - `cad_open_drawing(filename)`：继续接受受控图纸目录内的单个文件名；另接受现有普通文件的本机盘符绝对路径，DXF 模式仅 `.dxf`，acad 模式 `.dwg/.dxf`。不接受 UNC 网络路径、相对子路径或 `..` 回退；路径和扩展名在 AutoCAD 连接前校验。此放宽只适用于打开，不改变新建与另存为的目录限制。打开后不会自动保存；显式保存外部 DWG/DXF 会写回原路径，acad 模式打开 DXF 后保存会在同目录生成 DWG，若目标已存在则拒绝覆盖。
 - `cad_switch_mode`：在执行依赖模式的操作前切换到 `dxf` 或 `acad`。
 - `cad_get_drawing_info`、`cad_get_drafting_environment`：读取当前图纸和制图环境，不应替代健康检查。
@@ -118,5 +118,12 @@ DXF 可读写图纸设置、图层、尺寸样式和基础属性块，但不提�
 ## 失败处理
 
 错误报告至少包含：失败工具、输入对象或文件、错误原文或 `request_id`、已完成的写操作、是否可以回滚、建议的下一步。仅当 `retryable=true` 时才可在确认当前文件状态后重试；不要把工具未返回的结果当作成功。
+
+stdio 服务的工作进程超时和崩溃另遵循以下约束，不能套用普通工具错误的回滚承诺：
+
+- `WORKER_UNAVAILABLE`：工作进程失效或请求尚未发送便失败，`retryable=false`。确认 CAD 已运行后重新连接并按完整路径绑定图纸，重新加载配置和获取预览令牌；也可按用户要求新建图纸。失败请求不会自动重放，DXF 未保存内存状态不能自动恢复。
+- `EXECUTION_UNKNOWN`：写请求发送后失去响应，`retryable=false`；`error_detail.details.rollback_status=not_verified` 表示无法证实回滚。禁止后续写入、保存、关闭、退出和切换模式，人工核对 CAD 后重启 MCP；重新连接或绑定图纸不能解除限制。
+- `error_detail.details.worker_cleanup=unverified`：工作进程清理未确认，阻止新的执行请求；保留 CAD 状态，检查残留工作进程并重启 MCP。默认本地健康诊断仍可返回。
+- 健康结果中的 `worker.running`、`pid`、`busy`、`generation` 反映 Python 工作进程状态；`rebind_required` 表示必须重新绑定图纸，`write_result_unknown` 表示写入结果未知。这些字段不证明 AutoCAD 已空闲或内部操作已中止。
 
 运行日志默认写入 `~/.cad-mcp/logs/cad_mcp.log`，可用 `CAD_LOG_DIR` 覆盖；单文件最多 2 MB，保留 2 个轮换备份。日志只记录操作名、错误分类和错误编号，不应记录完整工程模型或绘图参数。

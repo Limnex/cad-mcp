@@ -29,6 +29,13 @@
 - 后端不再回退到启动新实例；找不到可连接实例时返回 `PRECONDITION_FAILED`，检查现有实例和权限，不循环重试。
 - 检查 `cad-mcp config show` 的默认模式是否符合预期。
 
+## 工作进程超时或退出
+
+- `WORKER_UNAVAILABLE`：只读请求或尚未发送的请求未完成。工作进程已清理，不重放原请求；重新连接并按路径绑定图纸，重新加载配置和获取预览令牌。
+- `EXECUTION_UNKNOWN`：写请求发送后失去响应。CAD 可能已部分执行；此时返回失败不代表已回滚。人工核对 CAD 后重启 MCP，期间禁止自动重试、保存、关闭或退出。
+- `cad_health(reconnect=false)` 的 `worker` 字段可在执行卡住时读取；它不调用 COM，不能据此认定 CAD 自身已经恢复。
+- `worker_cleanup=unverified` 时不继续建立工作进程或发送请求，先检查残留的 MCP 工作进程。
+
 ## 日志与错误编号
 
 默认日志位置：

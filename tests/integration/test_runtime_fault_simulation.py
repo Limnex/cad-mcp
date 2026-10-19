@@ -3,12 +3,13 @@
 import json
 import os
 from pathlib import Path
-import queue
 import subprocess
 import sys
-import threading
 
 import pytest
+
+from cad_mcp.core.isolation import ToolProcessSupervisor
+from cad_mcp.core.runtime import CadMcpError
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -87,42 +88,23 @@ def test_mid_scan_disconnect_stops_at_first_fault_instead_of_continuing(tmp_path
     assert result["deadline_context_reset"] is True
 
 
-class KnownBlockingCallLimit(AssertionError):
-    """Only the verified permanent-call limitation may be an expected failure."""
-
-
-@pytest.mark.xfail(
-    raises=KnownBlockingCallLimit, strict=True,
-    reason="Known limitation: a single non-returning native call cannot be interrupted by the cooperative scan deadline",
-)
-def test_single_nonreturning_call_requires_external_test_process_cleanup(tmp_path):
-    process = subprocess.Popen(
-        [sys.executable, "-B", str(WORKER), "hang", str(tmp_path)],
-        cwd=ROOT, env=worker_environment(tmp_path),
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        text=True, encoding="utf-8",
+def test_single_nonreturning_call_is_stopped_by_production_supervisor(tmp_path, monkeypatch):
+    for key, value in worker_environment(tmp_path).items():
+        monkeypatch.setenv(key, value)
+    supervisor = ToolProcessSupervisor(
+        command=[sys.executable, "-B", str(WORKER), "isolated-hang-worker", str(tmp_path)],
+        read_timeout=0.3,
     )
-    messages = queue.Queue()
-    reader = threading.Thread(target=lambda: messages.put(process.stdout.readline()), daemon=True)
-    reader.start()
-    blocked = False
     try:
-        event = json.loads(messages.get(timeout=15))
-        assert event == {"event": "entered_blocking_call", "scan_budget_seconds": 0.1}
-        try:
-            process.wait(timeout=0.5)
-        except subprocess.TimeoutExpired:
-            blocked = True
+        with pytest.raises(CadMcpError) as caught:
+            supervisor.call("cad_list_layers_detailed", {"params": {}})
+        assert caught.value.code == "WORKER_UNAVAILABLE"
+        assert caught.value.details["worker_cleanup"] == "completed"
+        assert (tmp_path / "blocking-call-entered").read_text(encoding="utf-8") == "entered"
+        assert supervisor._process is None
+        health = json.loads(supervisor.call("cad_health", {"params": {"reconnect": False}}))
+        assert health["ok"] is True
+        assert health["worker"]["write_result_unknown"] is False
+        assert health["worker"]["rebind_required"] is True
     finally:
-        if process.poll() is None:
-            process.kill()  # Only this test-owned worker; never an AutoCAD process.
-        stdout, stderr = process.communicate(timeout=5)
-        reader.join(timeout=1)
-    assert not reader.is_alive()
-    if blocked:
-        assert "unexpected_return" not in stdout
-        raise KnownBlockingCallLimit(
-            "The worker stayed inside one call beyond its 0.1-second scan budget; "
-            "only the external test harness terminated it. This is not a successful MCP recovery."
-        )
-    assert process.returncode == 0, stderr
+        supervisor.close()

@@ -38,9 +38,11 @@ CAD_MCP_TOOLSET=webcodex
 
 - `cad_gateway_list`：列出原始 CAD 工具。
 - `cad_gateway_describe`：按名称读取单个原始工具的 Schema。
-- `cad_gateway_call`：按名称在同一 CAD MCP 进程内调用原始工具。
+- `cad_gateway_call`：按名称调用原始工具，由常驻工作进程串行执行。
 
-原始工具实现不会复制，也不会启动多个 CAD MCP provider，因此当前图纸、DXF 内存状态和 AutoCAD 后端状态仍由同一个进程持有。未设置该变量或设置为 `all` 时，仍直接暴露全部工具。
+两种工具暴露模式都使用一个 CAD MCP provider：主进程接收请求并监控超时，一个常驻工作进程持有当前图纸、DXF 内存状态、配置缓存和 AutoCAD 后端状态。网关复用原始工具实现，不为每次调用新建进程。未设置该变量或设置为 `all` 时，仍直接暴露全部工具。
+
+工作进程超时或崩溃后会失去这些内存状态，且不自动重放请求。恢复连接和写入限制见[使用指南](usage.md#保存与故障停止)；网关模式同样适用。
 
 WebCodex Runner 示例：
 
