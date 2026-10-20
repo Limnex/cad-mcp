@@ -18,6 +18,7 @@ import ezdxf
 from ezdxf import bbox
 from ezdxf.enums import TextEntityAlignment
 from ezdxf.math import offset_vertices_2d
+from ezdxf.tools import pattern as hatch_patterns
 
 from cad_mcp.dwt.contracts import build_drawing_settings_payload
 from cad_mcp.dwt.dxf import DxfDwtMixin
@@ -29,6 +30,7 @@ from cad_mcp.core.geometry import (
     trim_polyline_detailed,
     validate_bulk_creation,
     validate_closed_polygon,
+    validate_hatch_parameters,
     validate_table_data,
 )
 from cad_mcp.core.registry import (
@@ -40,6 +42,7 @@ from cad_mcp.core.registry import (
 )
 from cad_mcp.core.runtime import health_metadata
 from cad_mcp.core.open_paths import resolve_open_drawing_path
+from cad_mcp.drawing.hatch_regions import fill_dxf_region
 
 # 单位常量（ezdxf $INSUNITS）：4 = 毫米
 UNIT_MM = 4
@@ -1076,20 +1079,37 @@ class CadDocument(DxfDwtMixin):
         return {"type": "DIMENSION", "handle": self._handle_str(dim.dxf.handle),
                 "layer": dim.dxf.layer, "kind": "radius", "radius": round(radius, 1)}
 
-    def draw_hatch(self, points: Sequence[Point], scale: float = 1.0,
-                   layer: str = LAYER_FILL) -> Dict[str, Any]:
-        """画剖面填充（ANSI31 斜线图案，工程图剖面线标配）。
-
-        points 为闭合边界的顶点列表（至少 3 个点）。scale 控制填充线间距（默认 1.0）。
-        """
-        self._check_doc()
-        if len(points) < 3:
-            raise ValueError("填充边界至少需要 3 个点")
-        hatch = self.msp.add_hatch(dxfattribs={"layer": layer})
-        hatch.paths.add_polyline_path(list(points), is_closed=True)
-        hatch.set_pattern_fill("ANSI31", scale=scale)
-        return {"type": "HATCH", "handle": self._handle_str(hatch.dxf.handle),
-                "layer": layer, "pattern": "ANSI31", "scale": scale}
+    def draw_hatch(
+        self,
+        *,
+        boundary_handle: Optional[str] = None,
+        boundary_handles: Optional[Sequence[str]] = None,
+        seed_point: Optional[Point] = None,
+        pattern: str = "ANSI31",
+        scale: float = 1.0,
+        angle: float = 0.0,
+        layer: str = "FILL",
+        associative: bool = False,
+        dry_run: bool = True,
+    ) -> Dict[str, Any]:
+        """Fill one closed entity, or an exact closed region bounded by selected entities."""
+        if (boundary_handle is None) == (boundary_handles is None):
+            raise ValueError("boundary_handle 与 boundary_handles 必须且只能提供一个")
+        if boundary_handles is not None:
+            return fill_dxf_region(
+                self, boundary_handles=boundary_handles, seed_point=seed_point,
+                pattern=pattern, scale=scale, angle=angle, layer=layer,
+                associative=associative, dry_run=dry_run,
+            )
+        if seed_point is not None:
+            raise ValueError("seed_point 仅用于 boundary_handles 组合边界模式")
+        if not isinstance(boundary_handle, str) or not boundary_handle.isdecimal():
+            raise ValueError("填充范围必须通过已有闭合边界的十进制句柄指定")
+        return self._fill_closed_boundary(
+            boundary_handle=boundary_handle, points=None, layer=layer,
+            associative=associative, keep_boundary=True, dry_run=dry_run,
+            pattern=pattern, scale=scale, angle=angle,
+        )
 
     def fill_closed_boundary_solid(
         self,
@@ -1103,7 +1123,33 @@ class CadDocument(DxfDwtMixin):
     ) -> Dict[str, Any]:
         """Create a SOLID HATCH and verify its persisted DXF fields immediately."""
 
+        return self._fill_closed_boundary(
+            boundary_handle=boundary_handle, points=points, layer=layer,
+            associative=associative, keep_boundary=keep_boundary, dry_run=dry_run,
+        )
+
+    def _fill_closed_boundary(
+        self,
+        *,
+        boundary_handle: Optional[str],
+        points: Optional[Sequence[Point]],
+        layer: str,
+        associative: bool,
+        keep_boundary: bool,
+        dry_run: bool,
+        pattern: str = "SOLID",
+        scale: float = 1.0,
+        angle: float = 0.0,
+    ) -> Dict[str, Any]:
+        """Create a native hatch and verify its stored settings and boundary."""
+
         self._check_doc()
+        pattern, scale, angle = validate_hatch_parameters(pattern, scale, angle)
+        solid = pattern == "SOLID"
+        if (boundary_handle is None) == (points is None):
+            raise ValueError("boundary_handle 与 points 必须且只能提供一个")
+        if not solid and pattern not in hatch_patterns.ISO_PATTERN:
+            raise ValueError(f"未知或不可用的 DXF 填充图案: {pattern}")
         boundary = None
         path_vertices: List[Tuple[float, ...]]
         boundary_area: float
@@ -1123,7 +1169,7 @@ class CadDocument(DxfDwtMixin):
                     raise ValueError("指定 LWPOLYLINE 边界未闭合")
                 raw_vertices = list(boundary.get_points("xyb"))
                 if any(abs(float(vertex[2])) > 1e-12 for vertex in raw_vertices):
-                    raise ValueError("当前实心填充回读不支持含 bulge 圆弧段的 LWPOLYLINE")
+                    raise ValueError("当前填充回读不支持含 bulge 圆弧段的 LWPOLYLINE")
                 normalized, boundary_area = validate_closed_polygon(
                     [(float(vertex[0]), float(vertex[1])) for vertex in raw_vertices]
                 )
@@ -1131,6 +1177,8 @@ class CadDocument(DxfDwtMixin):
             elif entity_type == "POLYLINE":
                 if not bool(boundary.is_closed):
                     raise ValueError("指定 POLYLINE 边界未闭合")
+                if not boundary.is_2d_polyline or any(abs(float(vertex.dxf.bulge)) > 1e-12 for vertex in boundary.vertices):
+                    raise ValueError("当前填充仅支持二维直线 POLYLINE 边界")
                 normalized, boundary_area = validate_closed_polygon([
                     (float(vertex.dxf.location.x), float(vertex.dxf.location.y))
                     for vertex in boundary.vertices
@@ -1139,11 +1187,17 @@ class CadDocument(DxfDwtMixin):
             elif entity_type == "CIRCLE":
                 center = boundary.dxf.center
                 radius = float(boundary.dxf.radius)
+                if not math.isfinite(radius) or radius <= 0:
+                    raise ValueError("圆形边界半径必须为大于 0 的有限数值")
+                if not all(math.isfinite(float(value)) for value in center):
+                    raise ValueError("圆形边界坐标必须是有限数值")
                 boundary_area = math.pi * radius * radius
                 path_vertices = []
             else:
                 raise ValueError(
-                    "DXF 实心填充仅支持显式点、闭合 LWPOLYLINE/POLYLINE 或 CIRCLE")
+                    "DXF 填充仅支持显式点、闭合 LWPOLYLINE/POLYLINE 或 CIRCLE")
+        if boundary_handle is not None and not keep_boundary:
+            raise ValueError("使用已有边界时必须 keep_boundary=true")
         if associative and not keep_boundary and boundary is None:
             raise ValueError("显式点创建关联填充时必须 keep_boundary=true")
         if dry_run:
@@ -1151,6 +1205,10 @@ class CadDocument(DxfDwtMixin):
                 "mode": "dxf",
                 "dry_run": True,
                 "would_write": False,
+                "pattern": pattern,
+                "scale": scale,
+                "angle": angle,
+                "pattern_availability": "available",
                 "boundary_kind": boundary_kind,
                 "boundary_area": boundary_area,
                 "layer": layer,
@@ -1159,15 +1217,33 @@ class CadDocument(DxfDwtMixin):
             }
 
         created_boundary = None
+        created_layer = False
         hatch = None
         try:
+            if layer not in self.doc.layers:
+                self.doc.layers.new(layer)
+                created_layer = True
             if points is not None and (keep_boundary or associative):
                 created_boundary = self.msp.add_lwpolyline(
                     path_vertices, close=True, dxfattribs={"layer": layer}
                 )
                 boundary = created_boundary
             hatch = self.msp.add_hatch(dxfattribs={"layer": layer})
-            hatch.set_solid_fill()
+            if solid:
+                hatch.set_solid_fill()
+            else:
+                hatch.set_pattern_fill(pattern, scale=scale, angle=angle)
+            if boundary is not None:
+                hatch.dxf.extrusion = boundary.dxf.extrusion
+                if boundary_kind == "LWPOLYLINE":
+                    elevation = float(boundary.dxf.elevation)
+                elif boundary_kind == "POLYLINE":
+                    elevation = float(boundary.dxf.elevation.z)
+                elif boundary_kind == "CIRCLE":
+                    elevation = float(boundary.dxf.center.z)
+                else:
+                    elevation = 0.0
+                hatch.dxf.elevation = (0.0, 0.0, elevation)
             if boundary_kind == "CIRCLE":
                 edge_path = hatch.paths.add_edge_path()
                 center = boundary.dxf.center
@@ -1201,17 +1277,26 @@ class CadDocument(DxfDwtMixin):
                     if read_box.has_data else None
                 ),
             }
+            if not solid:
+                readback["pattern_scale"] = float(hatch.dxf.pattern_scale)
+                readback["pattern_angle"] = float(hatch.dxf.pattern_angle)
             verified = (
                 readback["entity_type"] == "HATCH"
-                and readback["pattern_name"].casefold() == "solid"
-                and readback["solid_fill"] is True
+                and readback["pattern_name"].upper() == pattern
+                and readback["solid_fill"] is solid
                 and readback["associative"] is associative
                 and readback["layer"] == layer
                 and readback["loop_count"] == 1
                 and readback["bounding_box"] is not None
             )
+            if not solid:
+                verified = (
+                    verified
+                    and math.isclose(readback["pattern_scale"], scale, rel_tol=1e-9, abs_tol=1e-12)
+                    and math.isclose((readback["pattern_angle"] - angle + 180.0) % 360.0 - 180.0, 0.0, abs_tol=1e-7)
+                )
             if not verified:
-                raise RuntimeError(f"实心填充写入后读回不一致: {readback}")
+                raise RuntimeError(f"填充写入后读回不一致: {readback}")
             if created_boundary is not None and not keep_boundary:
                 created_boundary.destroy()
                 created_boundary = None
@@ -1231,9 +1316,13 @@ class CadDocument(DxfDwtMixin):
             }
         except Exception:
             if hatch is not None and hatch.is_alive:
-                hatch.destroy()
+                if boundary is not None and boundary.is_alive:
+                    boundary.discard_reactor_handle(hatch.dxf.handle)
+                self.msp.delete_entity(hatch)
             if created_boundary is not None and created_boundary.is_alive:
-                created_boundary.destroy()
+                self.msp.delete_entity(created_boundary)
+            if created_layer:
+                self.doc.layers.remove(layer)
             raise
 
     def draw_centerline(self, x1: float, y1: float, x2: float, y2: float,
