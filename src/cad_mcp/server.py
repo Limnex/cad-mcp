@@ -33,6 +33,7 @@ from cad_mcp.drawing.document import (
     LAYER_FURNITURE,
     LAYER_FILL,
 )
+from cad_mcp.drawing.entity_properties import EntityPropertyPatch
 from cad_mcp.core.geometry import (
     MAX_TABLE_COLUMNS,
     MAX_TABLE_ROWS,
@@ -159,6 +160,8 @@ class _AcadLockProxy:
     dxf 模式不经此代理（不碰 AutoCAD，无需锁）。
     """
 
+    # edit_entity_properties owns its undo group after preflight: an empty group
+    # followed by U could otherwise undo the preceding successful operation.
     _MUTATING_METHODS = {
         "create_layer", "set_layer_props", "set_active_layer",
         "create_or_update_textstyle", "create_or_update_dimstyle",
@@ -1678,6 +1681,46 @@ def cad_join_polyline(params: JoinPolylineInput) -> str:
     try:
         return _ok({"ok": True, **_get_backend().join_polyline(
             params.handles, params.close, params.tolerance, params.layer)})
+    except Exception as e:
+        return _fail(e)
+
+
+class GetEntityPropertiesInput(ToolInput):
+    handle: str = Field(..., pattern=r"^[0-9]{1,40}$", description="模型空间实体的十进制句柄")
+
+
+@mcp.tool(
+    name="cad_get_entity_properties",
+    annotations={"title": "读取已有实体属性", "readOnlyHint": True,
+                 "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+)
+def cad_get_entity_properties(params: GetEntityPropertiesInput) -> str:
+    """按十进制句柄读取实体属性和 editable_properties 白名单；不修改图纸。"""
+    try:
+        return _ok({"ok": True, **_get_backend().get_entity_properties(params.handle)})
+    except Exception as e:
+        return _fail(e)
+
+
+class EditEntityPropertiesInput(GetEntityPropertiesInput):
+    properties: EntityPropertyPatch = Field(..., description="仅包含要修改的属性，禁止 null 和未知字段")
+    dry_run: bool = Field(default=True, strict=True, description="默认只预览；false 正式修改并回读，不自动保存")
+
+
+@mcp.tool(
+    name="cad_edit_entity_properties",
+    annotations={"title": "编辑已有实体属性", "readOnlyHint": False,
+                 "destructiveHint": True, "idempotentHint": True, "openWorldHint": False},
+)
+def cad_edit_entity_properties(params: EditEntityPropertiesInput) -> str:
+    """编辑模型空间实体。支持通用外观、TEXT/MTEXT、LINE 端点和 CIRCLE 圆心半径。
+
+    先以 dry_run=true 检查 changes，再用相同 properties 和 dry_run=false 应用。
+    图层和线型必须已存在；拒绝锁定图层及不适用字段。失败回滚，不自动保存。
+    """
+    try:
+        return _ok({"ok": True, **_get_backend().edit_entity_properties(
+            params.handle, params.properties.model_dump(exclude_unset=True), dry_run=params.dry_run)})
     except Exception as e:
         return _fail(e)
 

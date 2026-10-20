@@ -1,6 +1,6 @@
 # CAD MCP
 
-CAD MCP 是面向 Codex 等 MCP 客户端的本地 CAD 服务端，提供 101 个 `cad_*` 工具，
+CAD MCP 是面向 Codex 等 MCP 客户端的本地 CAD 服务端，提供 104 个 `cad_*` 工具，
 用于创建、检查和修改 DXF/DWG，配置 DraftingProfile 2.0、DWG 图框、布局视口以及 PDF
 出图。仓库同时包含 Python 服务端、Codex 插件清单和内置 Skill。
 
@@ -30,6 +30,12 @@ CAD MCP 只负责把已经确定的数据转换为 CAD 实体。工程尺寸、�
 版本 `1.5.0` 新增按严格 `*_manifest.json` 规格卡审查指定 DWG 块，以及封闭边界
 `SOLID` 实心填充和写后回读验证。无法读取或没有明确规格的字段返回“无法验证”，不会
 用常见默认值替代。
+
+## 编辑已有实体
+
+用 `cad_get_entity_properties` 按十进制句柄读取当前属性，再用 `cad_edit_entity_properties` 修改。支持通用图层、索引色、线型、线宽和线型比例，以及 TEXT/MTEXT 内容、字高和旋转角，LINE 端点及 CIRCLE 圆心、半径。
+
+编辑默认 `dry_run=true` 只预览差异；正式修改需显式设置 `false`。图层和线型须已存在，锁定图层拒绝修改；写后回读，失败尝试回滚，不自动保存。完整参数与示例见[工具契约](skills/cad-mcp/references/tool-contracts.md#已有实体属性读取与编辑)。
 
 ## 安装
 

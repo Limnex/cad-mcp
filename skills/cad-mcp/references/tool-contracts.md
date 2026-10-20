@@ -1,6 +1,6 @@
 # CAD MCP 工具契约
 
-本文记录调用约束。当前运行时版本为 `1.5.3`，注册 101 个 `cad_*` 工具。具体参数名和返回字段以运行时 MCP 工具定义为准；若运行时定义与本文不一致，应以运行时定义为准并报告差异。
+本文记录调用约束。当前运行时版本为 `1.5.3`，注册 104 个 `cad_*` 工具。具体参数名和返回字段以运行时 MCP 工具定义为准；若运行时定义与本文不一致，应以运行时定义为准并报告差异。
 
 ## 调用前
 
@@ -44,6 +44,33 @@
 - `cad_create_or_update_ctb`：先确认目标目录正是 AutoCAD 实际打印样式目录，并检查覆盖策略。`dry_run=true` 返回计划；由于 ActiveX 不能可靠创建/编辑 CTB，正式调用返回 `UNSUPPORTED_OPERATION`，不创建空文件，也不伪造哈希。
 
 DXF 可读写图纸设置、图层、尺寸样式和基础属性块，但不提供真实 CTB/STB 转换、命名页面设置、DWG 块库或关联 AutoCAD 字段。相关正式调用必须返回 `UNSUPPORTED_MODE`；DWT 配置正式应用限定 `acad`。
+
+## 已有实体属性读取与编辑
+
+- `cad_get_entity_properties(handle)`：只读，句柄为现有查询工具返回的十进制字符串。返回 `type`、`properties`、`true_color` 与 `editable_properties`。仅支持模型空间图形实体，拒绝块定义内部、纸空间及非图形对象；句柄不存在返回 `NOT_FOUND`。
+- `cad_edit_entity_properties(handle, properties, dry_run=true)`：白名单部分更新，省略字段表示保留，拒绝空对象、`null`、未知字段和非有限数值。`dry_run=true` 零写入，返回 `changes` 中逐字段的 `before/after`；顶层 `before/after` 是实际实体快照，因此预览时二者相同。`would_write` 表示是否存在差异；正式应用且确有差异时 `applied=true, verified=true`。无差异不执行 setter；`applied=false, verified=true` 表示当前值已满足请求。
+
+| 范围 | properties 字段 | 单位与约束 |
+|---|---|---|
+| 通用外观 | `layer`, `color`, `linetype`, `lineweight`, `linetype_scale` | 图层及线型须已存在，不自动创建或加载；源和目标图层不得锁定 |
+| 索引色 | `color` | 整数 0–256，0=ByBlock，256=ByLayer；显式设置会清除已有真彩色，原 RGB 值在 `true_color` 返回 |
+| 线宽 | `lineweight` | 标准 CAD 整数线宽，单位 1/100 mm；-1=ByLayer，-2=ByBlock，-3=Default |
+| 线型比例 | `linetype_scale` | 大于 0 |
+| TEXT / MTEXT | `text`, `height`, `rotation` | 内容保留首尾空格；字高 mm 且大于 0；旋转角为度，归一到 [0,360)；TEXT 禁止换行，MTEXT 支持原生格式码 |
+| LINE | `start`, `end` | WCS 三维坐标 `[x,y,z]`，mm；端点不能重合 |
+| CIRCLE | `center`, `radius` | 圆心为 WCS `[x,y,z]`，mm；半径大于 0 |
+
+不适用当前实体的字段返回 `UNSUPPORTED_OPERATION`。已有或新输入文字含关联字段表达式时拒绝覆盖；不通过该工具编辑块属性、尺寸值、填充图案、多段线顶点或文字样式。其他图形实体只提供通用外观属性。
+
+正式应用先通过全部预检，再建立 DXF 内存快照或 AutoCAD 撤销组。写后回读请求值；不一致或写入失败时尝试回滚，通过统一错误响应的 `error_detail.details.rollback_status` 报告结果；AutoCAD 回滚还会核对实体属性。失败或回滚无法核实时停止，不自动保存图纸。
+
+例如，先只预览修改文字内容和字高：
+
+```json
+{"params":{"handle":"123","properties":{"text":"更新后的说明","height":3.5},"dry_run":true}}
+```
+
+核对 `changes` 后，以相同句柄和 `properties`、`dry_run=false` 正式应用。修改前实体可能已变化，正式调用会重新预检并返回本次实际差异，预览不锁定图纸。
 
 ## 属性块、字段和独立块库
 

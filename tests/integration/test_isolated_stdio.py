@@ -23,7 +23,7 @@ def test_production_stdio_executes_tools_in_persistent_worker(tmp_path, toolset)
             async with ClientSession(reader, writer) as session:
                 await session.initialize()
                 tools = await session.list_tools()
-                assert len(tools.tools) == (102 if toolset == "all" else 3)
+                assert len(tools.tools) == (104 if toolset == "all" else 3)
 
                 async def call(name, params):
                     if toolset == "webcodex":
@@ -39,6 +39,19 @@ def test_production_stdio_executes_tools_in_persistent_worker(tmp_path, toolset)
                 queried = await call("cad_query_entities", {"limit": 10})
                 assert queried["ok"] is True
                 assert len(queried["entities"]) == 1
+                handle = drawn["handle"]
+                original = await call("cad_get_entity_properties", {"handle": handle})
+                assert original["ok"] and original["properties"]["color"] == 256
+                preview = await call("cad_edit_entity_properties", {
+                    "handle": handle, "properties": {"color": 1, "end": [20, 5, 0]}})
+                assert preview["ok"] and preview["dry_run"] and not preview["applied"]
+                assert await call("cad_get_entity_properties", {"handle": handle}) == original
+                edited = await call("cad_edit_entity_properties", {
+                    "handle": handle, "properties": {"color": 1, "end": [20, 5, 0]}, "dry_run": False})
+                assert edited["ok"] and edited["verified"] and edited["applied"]
+                readback = await call("cad_get_entity_properties", {"handle": handle})
+                assert readback["properties"]["end"] == [20.0, 5.0, 0.0]
+                assert readback["properties"]["color"] == 1
                 dimension = await call("cad_draw_diameter_dimension", {
                     "cx": 0, "cy": 0, "edge_x": 30, "edge_y": 40,
                     "text_x": 100, "text_y": 100})

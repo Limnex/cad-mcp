@@ -1593,6 +1593,17 @@ class CadDocument(DxfDwtMixin):
 
     # ---------- 查询 / 修改 ----------
 
+    def get_entity_properties(self, handle: str) -> Dict[str, Any]:
+        """读取模型空间实体属性及可编辑字段。"""
+        from cad_mcp.drawing.entity_properties import get_entity_properties
+        return get_entity_properties(self, handle, "dxf")
+
+    def edit_entity_properties(self, handle: str, properties: Dict[str, Any],
+                               *, dry_run: bool = True) -> Dict[str, Any]:
+        """先预检，按白名单修改实体并回读验证；默认零写入预览。"""
+        from cad_mcp.drawing.entity_properties import edit_entity_properties
+        return edit_entity_properties(self, handle, properties, dry_run=dry_run, mode="dxf")
+
     def list_entities(self, layer: Optional[str] = None,
                       offset: int = 0, limit: int = 100) -> str:
         """分页列出图元。句柄统一为十进制。"""
