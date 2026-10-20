@@ -59,6 +59,8 @@ CAD MCP 负责把已确定的工程数据转成 CAD 实体，并负责检查、�
 
 编辑已有实体时，先用 `cad_get_entity_properties` 核对十进制句柄、当前值及 `editable_properties`；再调用 `cad_edit_entity_properties(dry_run=true)` 查看 `changes`，确认后用相同 `properties` 和 `dry_run=false` 应用。检查 `applied`、`verified` 和 `after`；无差异时 `applied=false`。只支持模型空间；图层、线型必须已存在且图层未锁定。不自动保存，失败时检查回滚状态。
 
+平面扩展支持 ARC、LWPOLYLINE、INSERT、HATCH、ELLIPSE、POINT，新增位置/方向只用 XY，保留原标高与 Z 比例，不投影倾斜对象。块属性用 `block_attributes` 按标签更新，数值传格式化字符串；固定 TEXT/MTEXT 用 `block_texts` 按查询返回的路径更新，通过克隆所需定义只影响选中实例。须核对同名其他实例、附属属性位置和填充孔洞/关联关系；动态块、外部参照、关联字段、渐变填充等超出边界时明确拒绝。完整字段及限制见工具契约。
+
 需要原生注释性块时，仅在 `acad` 模式调用 `cad_make_block(annotative=true)`；需要 ATTDEF 属性时调用 `cad_create_or_update_attribute_block(annotative=true)`。两种调用均检查 `verified` 与 `readback`。DXF 模式不支持此开关；不得用普通块加手动比例冒充。
 
 ### DWG 块审查与实心填充

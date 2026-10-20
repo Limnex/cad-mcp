@@ -60,7 +60,36 @@ DXF 可读写图纸设置、图层、尺寸样式和基础属性块，但不提�
 | LINE | `start`, `end` | WCS 三维坐标 `[x,y,z]`，mm；端点不能重合 |
 | CIRCLE | `center`, `radius` | 圆心为 WCS `[x,y,z]`，mm；半径大于 0 |
 
-不适用当前实体的字段返回 `UNSUPPORTED_OPERATION`。已有或新输入文字含关联字段表达式时拒绝覆盖；不通过该工具编辑块属性、尺寸值、填充图案、多段线顶点或文字样式。其他图形实体只提供通用外观属性。
+不适用当前实体的字段返回 `UNSUPPORTED_OPERATION`。已有或新输入文字含关联字段表达式时拒绝覆盖。尺寸测量值、文字样式、三维实体及下述范围外的专有属性不通过本工具编辑；其他图形实体只提供通用外观属性。
+
+### 平面实体扩展
+
+新增几何编辑仅支持法向 +Z 的 XY 平面，不投影或重建倾斜实体。所有新增位置向量为 `[x,y]`，保留原标高；块的 Z 比例保持不变。返回只读 `elevation`，块另返回只读 `z_scale`。原 LINE/CIRCLE 三维字段兼容性保留；CIRCLE 的 `center` 也可用 XY，沿用原 Z 值。
+
+| 实体 | 可编辑专有字段 | 约束 |
+|---|---|---|
+| ARC | `center`, `radius`, `start_angle`, `end_angle` | 圆心 XY，半径正值，角度为度且起止不能重合 |
+| LWPOLYLINE | `vertices`, `closed`, `constant_width` | 顶点为 `{x,y,bulge,start_width,end_width}`；同顶点数时省略的弯曲和宽度保留；开放至少 2 点、闭合至少 3 点；相邻点不重合 |
+| INSERT | `position`, `rotation`, `x_scale`, `y_scale`, `block_attributes`, `block_texts` | XY 插入点，旋转为度，正向 XY 比例；变换时同步附属属性文字 |
+| HATCH | `pattern`, `pattern_scale`, `pattern_angle` | 预定义图案、正比例（最大 1000）、角度为度；保留原环路、孔洞、关联性；SOLID 比例/角度归为 1/0 |
+| ELLIPSE | `center`, `major_axis`, `radius_ratio`, `start_parameter`, `end_parameter` | XY 圆心，长轴半径向量 `[dx,dy]` 非零；短长轴比 `(0,1]`；起止参数为弧度，整椭圆用 `0` 和 `2π` |
+| POINT | `position` | XY 坐标，保留原标高 |
+
+多段线最多 1000 顶点。改变含圆弧段或宽度的多段线顶点数时，必须逐点显式指定 `bulge/start_width/end_width`，防止默默丢失。返回的 `constant_width=null` 表示各段实际宽度不同；这只是读取状态，更新时仍禁止传 null。常量线宽与显式非零逐段宽度不可在同一请求混用。DXF 关联边界不能自动同步填充时拒绝改形；渐变填充不转换为普通填充。
+
+### 块内文字与数值
+
+`properties.block_attributes` 返回可定位的属性标签及当前内容；`properties.block_texts` 返回固定 TEXT/MTEXT 的路径及内容。路径由块内对象序号组成，嵌套时以 `/` 分隔，例如 `"2/1"`，必须使用刚读取的路径，不按文字相似度猜测对象。
+
+更新属性标签不区分大小写；未知或歧义标签、未知文字路径及关联字段在写入前拒绝。值必须为字符串；使用 `"24.00"` 等保存数值格式，不执行公式或改变实际几何尺寸。
+
+```json
+{"params":{"handle":"123","properties":{"block_attributes":{"FLOW":"24.00"},"block_texts":{"1":"更新后的设备名称"}},"dry_run":true}}
+```
+
+固定文字采用按需复制块定义：仅复制选中实例及被修改的嵌套路径，不覆盖共享原定义，不分解块，选中实例句柄保持不变。`after.block_name` 显示新的独立块名；再次应用相同值不会继续复制。正式失败时回滚新定义和实例绑定。
+
+块内容扫描上限 1000 对象、嵌套深度 8，属性/更新项各最多 256；循环引用、动态/匿名块、外部参照，以及无法保留扩展数据或关联依赖的固定文字克隆会被拒绝。含尺寸、填充或未知对象的块暂不复制固定文字。仅允许统一 XYZ 缩放的块若需要改变 XY 比例，因本工具保留 Z 而拒绝。已有镜像/零比例块、带多行属性的几何变换也明确拒绝；简单内容更新按可验证能力处理。
 
 正式应用先通过全部预检，再建立 DXF 内存快照或 AutoCAD 撤销组。写后回读请求值；不一致或写入失败时尝试回滚，通过统一错误响应的 `error_detail.details.rollback_status` 报告结果；AutoCAD 回滚还会核对实体属性。失败或回滚无法核实时停止，不自动保存图纸。
 

@@ -1,7 +1,8 @@
 """Single-entity property contracts, preflight and verified transactional edits.
 
 Coordinates are WCS millimetres; rotations are degrees, including for COM.
-Only model-space graphical entities are addressable. No resources are created.
+Only model-space graphical entities are addressable. Layers and linetypes must
+already exist; fixed block text edits may create isolated block definitions.
 """
 
 from __future__ import annotations
@@ -16,12 +17,27 @@ import ezdxf
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serializer, model_validator
 
 from cad_mcp.core.runtime import CadMcpError, UnsupportedOperationError
+from cad_mcp.drawing.entity_properties_2d import PlanarPropertiesMixin, PLANAR_FIELDS, COM_KINDS
 
 
 LINEWEIGHTS = {-3, -2, -1, 0, 5, 9, 13, 15, 18, 20, 25, 30, 35, 40,
                50, 53, 60, 70, 80, 90, 100, 106, 120, 140, 158, 200, 211}
 Number = Annotated[float, Field(allow_inf_nan=False, strict=True)]
 Point3D = tuple[Number, Number, Number]
+Point2D = tuple[Number, Number]
+
+
+class PolylineVertex(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    x: Number
+    y: Number
+    bulge: Number = 0.0
+    start_width: Number = Field(default=0.0, ge=0)
+    end_width: Number = Field(default=0.0, ge=0)
+
+    @model_serializer(mode="wrap")
+    def supplied(self, handler):
+        return {key: value for key, value in handler(self).items() if key in self.model_fields_set}
 
 
 class EntityPropertyPatch(BaseModel):
@@ -38,11 +54,38 @@ class EntityPropertyPatch(BaseModel):
     text: str | None = Field(default=None, min_length=1, max_length=10000,
                              description="TEXT/MTEXT 内容；保留空格，MTEXT 支持原生格式码")
     height: Number | None = Field(default=None, gt=0, description="TEXT/MTEXT 字高，mm")
-    rotation: Number | None = Field(default=None, description="TEXT/MTEXT 旋转角，度")
+    rotation: Number | None = Field(default=None, description="TEXT/MTEXT/INSERT 旋转角，度")
     start: Point3D | None = Field(default=None, description="LINE 起点，WCS [x,y,z]")
     end: Point3D | None = Field(default=None, description="LINE 终点，WCS [x,y,z]")
-    center: Point3D | None = Field(default=None, description="CIRCLE 圆心，WCS [x,y,z]")
-    radius: Number | None = Field(default=None, gt=0, description="CIRCLE 半径，mm")
+    center: Point2D | Point3D | None = Field(default=None, description="圆心；ARC/ELLIPSE 仅 [x,y]，CIRCLE 保留原 [x,y,z] 兼容性")
+    radius: Number | None = Field(default=None, gt=0, description="CIRCLE/ARC 半径，mm")
+
+    position: Point2D | None = Field(default=None, description="POINT/INSERT 的 XY 坐标，保留原标高")
+    start_angle: Number | None = Field(default=None, description="ARC 起始角，度")
+    end_angle: Number | None = Field(default=None, description="ARC 终止角，度")
+    vertices: list[PolylineVertex] | None = Field(default=None, min_length=2, max_length=1000)
+    closed: bool | None = Field(default=None, strict=True)
+    constant_width: Number | None = Field(default=None, ge=0)
+    x_scale: Number | None = Field(default=None, gt=0, le=1000000)
+    y_scale: Number | None = Field(default=None, gt=0, le=1000000)
+    block_attributes: dict[str, str] | None = Field(default=None, min_length=1, max_length=256,
+        description="按属性标签修改内容；数值使用字符串，如 12.00，保留显示格式")
+    block_texts: dict[str, str] | None = Field(default=None, min_length=1, max_length=256,
+        description="使用读取结果中的文字路径修改固定 TEXT/MTEXT，仅影响选中块实例")
+    pattern: str | None = Field(default=None, min_length=1, max_length=255)
+    pattern_scale: Number | None = Field(default=None, gt=0, le=1000)
+    pattern_angle: Number | None = None
+    major_axis: Point2D | None = Field(default=None, description="ELLIPSE 平面长轴半径向量 [dx,dy]")
+    radius_ratio: Number | None = Field(default=None, gt=0, le=1)
+    start_parameter: Number | None = Field(default=None, ge=0, lt=math.tau, description="椭圆起始参数，弧度")
+    end_parameter: Number | None = Field(default=None, ge=0, le=math.tau, description="椭圆终止参数，弧度；整椭圆为 0 到 2π")
+
+    @field_validator("block_attributes", "block_texts")
+    @classmethod
+    def bounded_block_values(cls, value):
+        if value is not None and any(not key or len(key)>255 or len(text)>10000 or "\0" in text for key,text in value.items()):
+            raise ValueError("块内容标签/路径不能为空或超长，文字不能超过 10000 字符或含空字符")
+        return value
 
     @field_validator("layer", "linetype")
     @classmethod
@@ -80,7 +123,7 @@ class EntityPropertyPatch(BaseModel):
 COMMON = ("layer", "color", "linetype", "lineweight", "linetype_scale")
 SPECIFIC = {"LINE": ("start", "end"), "CIRCLE": ("center", "radius"),
             "TEXT": ("text", "height", "rotation"),
-            "MTEXT": ("text", "height", "rotation")}
+            "MTEXT": ("text", "height", "rotation"), **PLANAR_FIELDS}
 DXF_NAMES = {"linetype_scale": "ltscale", "height": "height", "text": "text"}
 COM_NAMES = {"layer": "Layer", "color": "Color", "linetype": "Linetype",
              "lineweight": "Lineweight", "linetype_scale": "LinetypeScale",
@@ -90,6 +133,8 @@ COM_NAMES = {"layer": "Layer", "color": "Color", "linetype": "Linetype",
 
 
 def equal_value(left, right, *, angle=False):
+    if isinstance(left, dict) and isinstance(right, dict):
+        return left.keys() == right.keys() and all(equal_value(left[key], right[key]) for key in left)
     if isinstance(left, (tuple, list)) and isinstance(right, (tuple, list)):
         return len(left) == len(right) and all(equal_value(a, b) for a, b in zip(left, right))
     if isinstance(left, (int, float)) and isinstance(right, (int, float)):
@@ -99,7 +144,7 @@ def equal_value(left, right, *, angle=False):
     return left == right
 
 
-class EntityAccess:
+class EntityAccess(PlanarPropertiesMixin):
     def __init__(self, backend, handle, mode):
         self.backend, self.mode = backend, mode
         backend._check_doc()
@@ -117,13 +162,15 @@ class EntityAccess:
         else:
             raw_kind = str(self.entity.ObjectName)
             self.kind = {"AcDbLine": "LINE", "AcDbCircle": "CIRCLE",
-                         "AcDbText": "TEXT", "AcDbMText": "MTEXT"}.get(raw_kind, raw_kind)
+                         "AcDbText": "TEXT", "AcDbMText": "MTEXT", **COM_KINDS}.get(raw_kind, raw_kind)
 
     @property
     def fields(self):
         return (*COMMON, *SPECIFIC.get(self.kind, ()))
 
     def read(self, name):
+        if self.kind in PLANAR_FIELDS and name in PLANAR_FIELDS[self.kind]:
+            return self.read_planar(name)
         e = self.entity
         if self.mode == "dxf":
             if self.kind == "MTEXT" and name == "text":
@@ -156,9 +203,10 @@ class EntityAccess:
         return None
 
     def describe(self):
+        self.require_xy_plane()
         result = {"handle": self.handle, "type": self.kind,
                   "properties": {name: self.read(name) for name in self.fields},
-                  "true_color": self.true_color(), "editable_properties": list(self.fields)}
+                  "true_color": self.true_color(), "editable_properties": list(self.fields), **self.planar_metadata()}
         # Fail before writing, or inside the transaction on readback, rather than
         # discovering an unserializable corrupt value after committing the edit.
         json.dumps(result, allow_nan=False)
@@ -188,6 +236,10 @@ class EntityAccess:
         for name in ("layer", "linetype"):
             if name in patch:
                 patch[name] = self.resource(patch[name], layer=name == "layer")
+        if self.kind in PLANAR_FIELDS and set(patch) - set(COMMON):
+            self.preflight_planar(patch, before)
+        if self.kind == "CIRCLE" and "center" in patch and len(patch["center"]) == 2:
+            patch["center"] = (*patch["center"], before["center"][2])
         if self.kind == "LINE":
             start, end = patch.get("start", before["start"]), patch.get("end", before["end"])
             if math.dist(start, end) <= 1e-10:
@@ -243,7 +295,7 @@ def edit_entity_properties(backend, handle, properties, *, dry_run=True, mode):
     access.preflight(patch, before)
     changes = {name: {"before": before[name], "after": value}
                for name, value in patch.items()
-               if not equal_value(before[name], value, angle=name == "rotation")
+               if not equal_value(before[name], value, angle=name in {"rotation", "start_angle", "end_angle", "pattern_angle"})
                or (name == "color" and original["true_color"] is not None)}
     result = {"handle": access.handle, "type": access.kind, "dry_run": dry_run,
               "changes": changes, "before": original, "would_write": bool(changes),
@@ -261,13 +313,22 @@ def edit_entity_properties(backend, handle, properties, *, dry_run=True, mode):
     else:
         started = backend._begin_undo()
     try:
+        planar_changes = {name: patch[name] for name in changes
+                          if access.kind in PLANAR_FIELDS and name in PLANAR_FIELDS[access.kind]}
+        if planar_changes:
+            access.write_planar(planar_changes)
         for name in changes:
-            access.write(name, patch[name])
+            if name not in planar_changes:
+                access.write(name, patch[name])
         if mode == "acad":
             access.entity.Update()
         after = access.describe()
+        if "elevation" in original and not equal_value(after["elevation"], original["elevation"]):
+            raise RuntimeError("平面编辑改变了原标高，已停止并尝试回滚")
+        if "z_scale" in original and not equal_value(after["z_scale"], original["z_scale"]):
+            raise RuntimeError("平面编辑改变了 Z 比例，已停止并尝试回滚")
         for name in patch:
-            if not equal_value(after["properties"][name], patch[name], angle=name == "rotation"):
+            if not equal_value(after["properties"][name], patch[name], angle=name in {"rotation", "start_angle", "end_angle", "pattern_angle"}):
                 raise RuntimeError(f"属性 {name} 写后回读不一致，已停止并尝试回滚")
         if "color" in patch and after["true_color"] is not None:
             raise RuntimeError("ACI 颜色未替换真彩色，已停止并尝试回滚")

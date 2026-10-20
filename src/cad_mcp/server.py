@@ -1713,7 +1713,10 @@ class EditEntityPropertiesInput(GetEntityPropertiesInput):
                  "destructiveHint": True, "idempotentHint": True, "openWorldHint": False},
 )
 def cad_edit_entity_properties(params: EditEntityPropertiesInput) -> str:
-    """编辑模型空间实体。支持通用外观、TEXT/MTEXT、LINE 端点和 CIRCLE 圆心半径。
+    """编辑模型空间实体。支持外观、文字、直线、圆，以及 ARC/LWPOLYLINE/INSERT/HATCH/ELLIPSE/POINT。
+
+    新增几何属性仅用 XY，保留原标高和 Z 比例。块内容按 block_attributes 标签或
+    block_texts 路径修改，固定文字克隆定义后仅重绑定选中实例，保留同名其他块。
 
     先以 dry_run=true 检查 changes，再用相同 properties 和 dry_run=false 应用。
     图层和线型必须已存在；拒绝锁定图层及不适用字段。失败回滚，不自动保存。
