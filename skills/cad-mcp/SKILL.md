@@ -57,6 +57,10 @@ CAD MCP 负责把已确定的工程数据转成 CAD 实体，并负责检查、�
 
 仅适用于局部补画、简单几何或精确单对象修改：新建或打开图纸，设置图层和样式，绘制或编辑实体，检查范围和视口适配，查询实体，执行 `cad_check_drawing`，最后保存。`cad_open_drawing` 可用受控图纸目录内的文件名，或现有本机图纸的盘符绝对路径；目录外图纸的保存位置须先与用户核对。
 
+编辑已有实体时，先用 `cad_get_entity_properties` 核对十进制句柄、当前值及 `editable_properties`；再调用 `cad_edit_entity_properties(dry_run=true)` 查看 `changes`，确认后用相同 `properties` 和 `dry_run=false` 应用。检查 `applied`、`verified` 和 `after`；无差异时 `applied=false`。只支持模型空间；图层、线型必须已存在且图层未锁定。不自动保存，失败时检查回滚状态。
+
+平面扩展支持 ARC、LWPOLYLINE、INSERT、HATCH、ELLIPSE、POINT，新增位置/方向只用 XY，保留原标高与 Z 比例，不投影倾斜对象。块属性用 `block_attributes` 按标签更新，数值传格式化字符串；固定 TEXT/MTEXT 用 `block_texts` 按查询返回的路径更新，通过克隆所需定义只影响选中实例。须核对同名其他实例、附属属性位置和填充孔洞/关联关系；动态块、外部参照、关联字段、渐变填充等超出边界时明确拒绝。完整字段及限制见工具契约。
+
 需要原生注释性块时，仅在 `acad` 模式调用 `cad_make_block(annotative=true)`；需要 ATTDEF 属性时调用 `cad_create_or_update_attribute_block(annotative=true)`。两种调用均检查 `verified` 与 `readback`。DXF 模式不支持此开关；不得用普通块加手动比例冒充。
 
 ### DWG 块审查与实心填充
@@ -67,7 +71,7 @@ CAD MCP 负责把已确定的工程数据转成 CAD 实体，并负责检查、�
 
 ## 运行时安全契约
 
-当前运行时版本为 `1.5.3`，注册 101 个 `cad_*` 工具。每次会话先调用 `cad_health(reconnect=false)`，核对模式、连接、文档状态、服务端与 Python 版本、后端能力和最近错误编号；用户明确 CAD 已打开且要求操作图纸时，可使用 `reconnect=true` 连接已有实例，无须额外确认。CAD 运行状态未知时先向用户确认。
+当前运行时版本为 `1.5.3`，注册 104 个 `cad_*` 工具。每次会话先调用 `cad_health(reconnect=false)`，核对模式、连接、文档状态、服务端与 Python 版本、后端能力和最近错误编号；用户明确 CAD 已打开且要求操作图纸时，可使用 `reconnect=true` 连接已有实例，无须额外确认。CAD 运行状态未知时先向用户确认。
 
 - 所有公开工具输入拒绝未知字段，数值字段拒绝 `NaN`、正无穷和负无穷；参数校验失败视为未执行写入，不得猜测参数后继续。
 - 工具函数捕获的运行错误返回 `ok: false`、`error` 和 `error_detail`；读取其中的 `code`、`operation`、`retryable`、`hint` 和 `request_id`。

@@ -3059,6 +3059,17 @@ class AcadBackend(AcadDwtMixin):
 
     # ---------- 查询 / 修改 ----------
 
+    def get_entity_properties(self, handle: str) -> Dict[str, Any]:
+        """读取模型空间实体属性及可编辑字段。"""
+        from cad_mcp.drawing.entity_properties import get_entity_properties
+        return get_entity_properties(self, handle, "acad")
+
+    def edit_entity_properties(self, handle: str, properties: Dict[str, Any],
+                               *, dry_run: bool = True) -> Dict[str, Any]:
+        """先预检，按白名单修改实体并回读验证；默认零写入预览。"""
+        from cad_mcp.drawing.entity_properties import edit_entity_properties
+        return edit_entity_properties(self, handle, properties, dry_run=dry_run, mode="acad")
+
     def _find(self, handle: str):
         """按句柄（十进制字符串）在模型空间查找图元。"""
         try:
