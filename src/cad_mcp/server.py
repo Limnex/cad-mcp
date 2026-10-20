@@ -53,6 +53,10 @@ from cad_mcp.core.contracts import (
 )
 from cad_mcp.dwt.contracts import DraftingProfileV2, load_dwt_profile_v2
 from cad_mcp.core.registry import reconcile_plan
+from cad_mcp.core.semantics import (
+    DIRECT_BACKEND, SemanticObject, SemanticBinding, protect_tool,
+    register_object, model_objects, semantic_report, semantic_read_backend,
+)
 from cad_mcp.core.rules import RuleSet, load_rule_set
 from cad_mcp.engineering.standards import (
     AnyDraftingProfile,
@@ -151,6 +155,16 @@ DRAWINGS_DIR = _SETTINGS.drawings_dir
 mcp = FastMCP("cad_mcp")
 
 
+def _tool(*args, **kwargs):
+    """Register the guarded implementation in both full and gateway toolsets."""
+    def decorate(fn):
+        guarded = protect_tool(
+            fn, read_only=kwargs.get("annotations", {}).get("readOnlyHint") is True,
+            settings=lambda: _SETTINGS, backend=lambda: _get_backend())
+        return mcp.tool(*args, **kwargs)(guarded)
+    return decorate
+
+
 class _AcadLockProxy:
     """acad 后端锁代理：所有公开方法调用期间持有"操作级锁"，结束自动释放。
 
@@ -238,7 +252,7 @@ _backend = _create_backend(_SETTINGS.mode)
 def _get_backend():
     """获取当前绘图后端（AI 可随时通过 cad_switch_mode 切换）。"""
     global _backend
-    return _backend
+    return DIRECT_BACKEND.get() or _backend
 
 
 def _raw_backend(backend):
@@ -274,6 +288,11 @@ class ToolInput(BaseModel):
     )
 
 
+class SemanticToolInput(ToolInput):
+    semantic: Optional[SemanticBinding] = Field(
+        default=None, description="严格模式必填：已登记对象的 project_id、object_id、role，可选 view_id；绘制与身份绑定同时完成")
+
+
 # ================= 工具：图纸管理 =================
 
 class NewDrawingInput(ToolInput):
@@ -294,7 +313,7 @@ class NewDrawingInput(ToolInput):
     )
 
 
-@mcp.tool(
+@_tool(
     name="cad_new_drawing",
     annotations={
         "title": "新建图纸",
@@ -336,7 +355,7 @@ class OpenDrawingInput(ToolInput):
     )
 
 
-@mcp.tool(
+@_tool(
     name="cad_open_drawing",
     annotations={
         "title": "打开图纸",
@@ -366,7 +385,7 @@ class SaveDrawingInput(ToolInput):
     pass
 
 
-@mcp.tool(
+@_tool(
     name="cad_save_drawing",
     annotations={
         "title": "保存图纸",
@@ -396,7 +415,7 @@ class GetDrawingInfoInput(ToolInput):
     pass
 
 
-@mcp.tool(
+@_tool(
     name="cad_get_drawing_info",
     annotations={
         "title": "查看图纸信息",
@@ -423,7 +442,7 @@ def cad_get_drawing_info(params: GetDrawingInfoInput) -> str:
 
 # ================= 工具：绘图 =================
 
-class DrawMLineInput(ToolInput):
+class DrawMLineInput(SemanticToolInput):
     model_config = ConfigDict(str_strip_whitespace=True)
     points: List[Tuple[float, float]] = Field(
         ..., description="MLINE 顶点列表 [[x1,y1],[x2,y2],...]；只绘制开放多线",
@@ -437,7 +456,7 @@ class DrawMLineInput(ToolInput):
     layer: Optional[str] = Field(default=None, description="图层名；留空使用当前图层")
 
 
-@mcp.tool(
+@_tool(
     name="cad_draw_mline",
     annotations={
         "title": "绘制多线 MLINE",
@@ -468,7 +487,7 @@ def cad_draw_mline(params: DrawMLineInput) -> str:
         return _fail(e)
 
 
-class TrimInput(ToolInput):
+class TrimInput(SemanticToolInput):
     model_config = ConfigDict(str_strip_whitespace=True)
     subject_handle: str = Field(
         ...,
@@ -485,7 +504,7 @@ class TrimInput(ToolInput):
     pick_y: float = Field(..., description="保留侧参考点 Y（毫米）：在要保留的一侧任选一点")
 
 
-@mcp.tool(
+@_tool(
     name="cad_trim",
     annotations={
         "title": "修剪图元",
@@ -515,7 +534,7 @@ def cad_trim(params: TrimInput) -> str:
         return _fail(e)
 
 
-class DrawRectangleInput(ToolInput):
+class DrawRectangleInput(SemanticToolInput):
     model_config = ConfigDict(str_strip_whitespace=True)
     x1: float = Field(..., description="第一个对角点 X（毫米）")
     y1: float = Field(..., description="第一个对角点 Y（毫米）")
@@ -524,7 +543,7 @@ class DrawRectangleInput(ToolInput):
     layer: Optional[str] = Field(default=LAYER_WALL, description="图层名，默认 WALL")
 
 
-@mcp.tool(
+@_tool(
     name="cad_draw_rectangle",
     annotations={
         "title": "画矩形",
@@ -550,7 +569,7 @@ def cad_draw_rectangle(params: DrawRectangleInput) -> str:
         return _fail(e)
 
 
-class DrawCircleInput(ToolInput):
+class DrawCircleInput(SemanticToolInput):
     model_config = ConfigDict(str_strip_whitespace=True)
     cx: float = Field(..., description="圆心 X（毫米）")
     cy: float = Field(..., description="圆心 Y（毫米）")
@@ -558,7 +577,7 @@ class DrawCircleInput(ToolInput):
     layer: Optional[str] = Field(default=LAYER_WALL, description="图层名，默认 WALL")
 
 
-@mcp.tool(
+@_tool(
     name="cad_draw_circle",
     annotations={
         "title": "画圆",
@@ -584,7 +603,7 @@ def cad_draw_circle(params: DrawCircleInput) -> str:
         return _fail(e)
 
 
-class DrawLineInput(ToolInput):
+class DrawLineInput(SemanticToolInput):
     model_config = ConfigDict(str_strip_whitespace=True)
     x1: float = Field(..., description="直线起点 X（毫米）")
     y1: float = Field(..., description="直线起点 Y（毫米）")
@@ -593,7 +612,7 @@ class DrawLineInput(ToolInput):
     layer: Optional[str] = Field(default=None, description="图层名，留空用当前活动图层")
 
 
-@mcp.tool(
+@_tool(
     name="cad_draw_line",
     annotations={
         "title": "画直线",
@@ -619,7 +638,7 @@ def cad_draw_line(params: DrawLineInput) -> str:
         return _fail(e)
 
 
-class DrawArcInput(ToolInput):
+class DrawArcInput(SemanticToolInput):
     model_config = ConfigDict(str_strip_whitespace=True)
     cx: float = Field(..., description="圆心 X（毫米）")
     cy: float = Field(..., description="圆心 Y（毫米）")
@@ -629,7 +648,7 @@ class DrawArcInput(ToolInput):
     layer: Optional[str] = Field(default=None, description="图层名，留空用当前活动图层")
 
 
-@mcp.tool(
+@_tool(
     name="cad_draw_arc",
     annotations={
         "title": "画圆弧",
@@ -656,7 +675,7 @@ def cad_draw_arc(params: DrawArcInput) -> str:
         return _fail(e)
 
 
-class DrawPolylineInput(ToolInput):
+class DrawPolylineInput(SemanticToolInput):
     model_config = ConfigDict(str_strip_whitespace=True)
     points: List[Tuple[float, float]] = Field(
         ...,
@@ -668,7 +687,7 @@ class DrawPolylineInput(ToolInput):
     layer: Optional[str] = Field(default=None, description="图层名，留空用当前活动图层")
 
 
-@mcp.tool(
+@_tool(
     name="cad_draw_polyline",
     annotations={
         "title": "画多段线",
@@ -695,7 +714,7 @@ def cad_draw_polyline(params: DrawPolylineInput) -> str:
         return _fail(e)
 
 
-class DrawHatchInput(ToolInput):
+class DrawHatchInput(SemanticToolInput):
     model_config = ConfigDict(str_strip_whitespace=True)
     boundary_handle: Optional[str] = Field(
         default=None,
@@ -730,7 +749,7 @@ class DrawHatchInput(ToolInput):
         return self
 
 
-@mcp.tool(
+@_tool(
     name="cad_draw_hatch",
     annotations={
         "title": "按已有闭合边界创建图案填充",
@@ -767,7 +786,7 @@ def cad_draw_hatch(params: DrawHatchInput) -> str:
         return _fail(e)
 
 
-class FillClosedBoundarySolidInput(ToolInput):
+class FillClosedBoundarySolidInput(SemanticToolInput):
     boundary_handle: Optional[str] = Field(
         description="已有闭合边界句柄；与 points 必须且只能提供一个",
         min_length=1,
@@ -794,7 +813,7 @@ class FillClosedBoundarySolidInput(ToolInput):
         return self
 
 
-@mcp.tool(
+@_tool(
     name="cad_fill_closed_boundary_solid",
     annotations={
         "title": "封闭边界实心填充并回读验证",
@@ -819,7 +838,7 @@ def cad_fill_closed_boundary_solid(params: FillClosedBoundarySolidInput) -> str:
         return _fail(e)
 
 
-class DrawTextInput(ToolInput):
+class DrawTextInput(SemanticToolInput):
     model_config = ConfigDict(str_strip_whitespace=True)
     text: str = Field(..., description="文字内容（如房间名）", min_length=1, max_length=200)
     x: float = Field(..., description="文字插入点 X（毫米）")
@@ -829,7 +848,7 @@ class DrawTextInput(ToolInput):
     layer: Optional[str] = Field(default=LAYER_TEXT, description="图层名，默认 TEXT")
 
 
-@mcp.tool(
+@_tool(
     name="cad_draw_text",
     annotations={
         "title": "写文字标注",
@@ -856,7 +875,7 @@ def cad_draw_text(params: DrawTextInput) -> str:
         return _fail(e)
 
 
-class DrawDimensionInput(ToolInput):
+class DrawDimensionInput(SemanticToolInput):
     model_config = ConfigDict(str_strip_whitespace=True)
     p1x: float = Field(..., description="被标注第一点 X")
     p1y: float = Field(..., description="被标注第一点 Y")
@@ -868,7 +887,7 @@ class DrawDimensionInput(ToolInput):
     layer: Optional[str] = Field(default=LAYER_DIM, description="图层名，默认 DIM")
 
 
-@mcp.tool(
+@_tool(
     name="cad_draw_dimension",
     annotations={
         "title": "尺寸标注",
@@ -896,7 +915,7 @@ def cad_draw_dimension(params: DrawDimensionInput) -> str:
         return _fail(e)
 
 
-class DrawDimensionAtInput(ToolInput):
+class DrawDimensionAtInput(SemanticToolInput):
     model_config = ConfigDict(str_strip_whitespace=True)
     p1x: float = Field(..., description="被标注第一点 X")
     p1y: float = Field(..., description="被标注第一点 Y")
@@ -909,7 +928,7 @@ class DrawDimensionAtInput(ToolInput):
     layer: Optional[str] = Field(default=LAYER_DIM, description="图层名，默认 DIM")
 
 
-@mcp.tool(
+@_tool(
     name="cad_draw_dimension_at",
     annotations={
         "title": "按指定位置画尺寸",
@@ -930,7 +949,7 @@ def cad_draw_dimension_at(params: DrawDimensionAtInput) -> str:
         return _fail(e)
 
 
-class DrawAngularDimensionInput(ToolInput):
+class DrawAngularDimensionInput(SemanticToolInput):
     model_config = ConfigDict(str_strip_whitespace=True)
     vertex_x: float = Field(..., description="角顶点 X（两条线交点）")
     vertex_y: float = Field(..., description="角顶点 Y（两条线交点）")
@@ -943,7 +962,7 @@ class DrawAngularDimensionInput(ToolInput):
     layer: Optional[str] = Field(default=LAYER_DIM, description="图层名，默认 DIM")
 
 
-@mcp.tool(
+@_tool(
     name="cad_draw_angular_dimension",
     annotations={
         "title": "角度标注",
@@ -971,7 +990,7 @@ def cad_draw_angular_dimension(params: DrawAngularDimensionInput) -> str:
         return _fail(e)
 
 
-class DrawRadiusDimensionInput(ToolInput):
+class DrawRadiusDimensionInput(SemanticToolInput):
     model_config = ConfigDict(str_strip_whitespace=True)
     cx: float = Field(..., description="圆心 X")
     cy: float = Field(..., description="圆心 Y")
@@ -980,7 +999,7 @@ class DrawRadiusDimensionInput(ToolInput):
     layer: Optional[str] = Field(default=LAYER_DIM, description="图层名，默认 DIM")
 
 
-@mcp.tool(
+@_tool(
     name="cad_draw_radius_dimension",
     annotations={
         "title": "半径标注",
@@ -1007,7 +1026,7 @@ def cad_draw_radius_dimension(params: DrawRadiusDimensionInput) -> str:
         return _fail(e)
 
 
-class DrawDiameterDimensionInput(ToolInput):
+class DrawDiameterDimensionInput(SemanticToolInput):
     cx: float = Field(..., description="圆心 X")
     cy: float = Field(..., description="圆心 Y")
     edge_x: float = Field(..., description="圆上一点 X，确定直径标注方向")
@@ -1023,7 +1042,7 @@ class DrawDiameterDimensionInput(ToolInput):
         return self
 
 
-@mcp.tool(
+@_tool(
     name="cad_draw_diameter_dimension",
     annotations={
         "title": "圆形直径标注",
@@ -1065,7 +1084,7 @@ class CreateLayerInput(ToolInput):
     transparency: Optional[int] = Field(default=None, description="图层透明度百分比 0-90", ge=0, le=90)
 
 
-@mcp.tool(
+@_tool(
     name="cad_create_layer",
     annotations={
         "title": "创建图层",
@@ -1108,7 +1127,7 @@ class SetLayerPropsInput(ToolInput):
     transparency: Optional[int] = Field(default=None, description="透明度百分比 0-90；留空不改", ge=0, le=90)
 
 
-@mcp.tool(
+@_tool(
     name="cad_set_layer_props",
     annotations={
         "title": "修改图层属性",
@@ -1143,7 +1162,7 @@ class SetActiveLayerInput(ToolInput):
     name: str = Field(..., description="要切换到的图层名（不存在则自动创建）", min_length=1, max_length=40)
 
 
-@mcp.tool(
+@_tool(
     name="cad_set_active_layer",
     annotations={
         "title": "切换当前图层",
@@ -1183,7 +1202,7 @@ class CreateOrUpdateTextStyleInput(ToolInput):
     set_current: bool = Field(default=True, description="是否设为当前文字样式")
 
 
-@mcp.tool(
+@_tool(
     name="cad_create_or_update_textstyle",
     annotations={
         "title": "创建或更新文字样式",
@@ -1240,7 +1259,7 @@ class CreateOrUpdateDimStyleInput(ToolInput):
     extension_line_lineweight: int = Field(default=-1, description="尺寸界线线宽 DIMLWE，-1=随层", ge=-3, le=211)
 
 
-@mcp.tool(
+@_tool(
     name="cad_create_or_update_dimstyle",
     annotations={
         "title": "创建或更新尺寸样式",
@@ -1291,7 +1310,7 @@ class SetLinetypeSettingsInput(ToolInput):
     regen: bool = Field(default=True, description="设置后是否重生成显示")
 
 
-@mcp.tool(
+@_tool(
     name="cad_set_linetype_settings",
     annotations={
         "title": "设置完整线型环境",
@@ -1316,7 +1335,7 @@ class GetDrawingSettingsInput(ToolInput):
     pass
 
 
-@mcp.tool(
+@_tool(
     name="cad_get_drawing_settings",
     annotations={
         "title": "读取图纸级单位和关键设置",
@@ -1339,7 +1358,7 @@ class ListLayersDetailedInput(ToolInput):
     pass
 
 
-@mcp.tool(
+@_tool(
     name="cad_list_layers_detailed",
     annotations={
         "title": "详细列出图层及实体数量",
@@ -1362,7 +1381,7 @@ class ListTextstylesInput(ToolInput):
     pass
 
 
-@mcp.tool(
+@_tool(
     name="cad_list_textstyles",
     annotations={
         "title": "列出文字样式及实际属性",
@@ -1385,7 +1404,7 @@ class GetDraftingEnvironmentInput(ToolInput):
     model_config = ConfigDict(str_strip_whitespace=True)
 
 
-@mcp.tool(
+@_tool(
     name="cad_get_drafting_environment",
     annotations={
         "title": "读取当前制图环境",
@@ -1408,7 +1427,7 @@ class SetLinetypeScaleInput(ToolInput):
     scale: float = Field(..., description="线型比例因子；必须由 Agent 明确给出，不再自动推算", gt=0, le=1000000)
 
 
-@mcp.tool(
+@_tool(
     name="cad_set_linetype_scale",
     annotations={
         "title": "设置线型比例",
@@ -1439,7 +1458,7 @@ class GetGeometryExtentsInput(ToolInput):
     model_config = ConfigDict(str_strip_whitespace=True)
 
 
-@mcp.tool(
+@_tool(
     name="cad_get_geometry_extents",
     annotations={
         "title": "读取图形总范围",
@@ -1469,7 +1488,7 @@ class EvaluateViewportFitInput(ToolInput):
         default=None, description="待校核的比例分母，如 200 表示 1:200；留空只返回最小所需分母", gt=0)
 
 
-@mcp.tool(
+@_tool(
     name="cad_evaluate_viewport_fit",
     annotations={
         "title": "校核图形能否放入图幅",
@@ -1520,7 +1539,7 @@ class QueryEntitiesInput(ToolInput):
     include_bounds: bool = Field(default=False, description="是否读取每个实体包围盒；会增加 COM 调用")
 
 
-@mcp.tool(
+@_tool(
     name="cad_query_entities",
     annotations={
         "title": "分页查询结构化实体",
@@ -1545,7 +1564,7 @@ class RegenInput(ToolInput):
     model_config = ConfigDict(str_strip_whitespace=True)
 
 
-@mcp.tool(
+@_tool(
     name="cad_regen",
     annotations={
         "title": "重生成图形显示",
@@ -1568,7 +1587,7 @@ class HealthInput(ToolInput):
     reconnect: bool = Field(default=False, description="acad 模式下是否主动尝试建立/恢复连接")
 
 
-@mcp.tool(
+@_tool(
     name="cad_health",
     annotations={
         "title": "检查 CAD 连接状态",
@@ -1585,6 +1604,7 @@ def cad_health(params: HealthInput) -> str:
         return _ok({
             "ok": True,
             "tool_count": len(mcp._tool_manager.list_tools()),
+            "semantic_policy": _SETTINGS.semantic_policy,
             **status,
         })
     except Exception as e:
@@ -1598,7 +1618,7 @@ class ListEntitiesInput(ToolInput):
     limit: int = Field(default=100, ge=1, le=500, description="单次最多返回数量")
 
 
-@mcp.tool(
+@_tool(
     name="cad_list_entities",
     annotations={
         "title": "列出图纸图元",
@@ -1623,12 +1643,12 @@ def cad_list_entities(params: ListEntitiesInput) -> str:
         return _fail(e)
 
 
-class ExplodeInput(ToolInput):
+class ExplodeInput(SemanticToolInput):
     model_config = ConfigDict(str_strip_whitespace=True)
     handle: str = Field(..., description="要分解的复合图元句柄", min_length=1, max_length=40)
 
 
-@mcp.tool(
+@_tool(
     name="cad_explode",
     annotations={
         "title": "分解复合图元",
@@ -1650,7 +1670,7 @@ def cad_explode(params: ExplodeInput) -> str:
         return _fail(e)
 
 
-class JoinPolylineInput(ToolInput):
+class JoinPolylineInput(SemanticToolInput):
     model_config = ConfigDict(str_strip_whitespace=True)
     handles: List[str] = Field(
         ..., description="待合并的 LINE / ARC / LWPOLYLINE / 2D POLYLINE 句柄",
@@ -1662,7 +1682,7 @@ class JoinPolylineInput(ToolInput):
         default=None, description="结果图层；留空继承首个源图元图层")
 
 
-@mcp.tool(
+@_tool(
     name="cad_join_polyline",
     annotations={
         "title": "合并为多段线",
@@ -1689,7 +1709,7 @@ class GetEntityPropertiesInput(ToolInput):
     handle: str = Field(..., pattern=r"^[0-9]{1,40}$", description="模型空间实体的十进制句柄")
 
 
-@mcp.tool(
+@_tool(
     name="cad_get_entity_properties",
     annotations={"title": "读取已有实体属性", "readOnlyHint": True,
                  "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
@@ -1697,7 +1717,9 @@ class GetEntityPropertiesInput(ToolInput):
 def cad_get_entity_properties(params: GetEntityPropertiesInput) -> str:
     """按十进制句柄读取实体属性和 editable_properties 白名单；不修改图纸。"""
     try:
-        return _ok({"ok": True, **_get_backend().get_entity_properties(params.handle)})
+        with semantic_read_backend(_get_backend()) as backend:
+            return _ok({"ok": True, **backend.get_entity_properties(params.handle),
+                        "semantic": semantic_report(backend, params.handle)["entities"][0]})
     except Exception as e:
         return _fail(e)
 
@@ -1707,7 +1729,7 @@ class EditEntityPropertiesInput(GetEntityPropertiesInput):
     dry_run: bool = Field(default=True, strict=True, description="默认只预览；false 正式修改并回读，不自动保存")
 
 
-@mcp.tool(
+@_tool(
     name="cad_edit_entity_properties",
     annotations={"title": "编辑已有实体属性", "readOnlyHint": False,
                  "destructiveHint": True, "idempotentHint": True, "openWorldHint": False},
@@ -1733,7 +1755,7 @@ class DeleteEntityInput(ToolInput):
     handle: str = Field(..., description="要删除图元的句柄（从 cad_list_entities 获取）", min_length=1, max_length=40)
 
 
-@mcp.tool(
+@_tool(
     name="cad_delete_entity",
     annotations={
         "title": "删除图元",
@@ -1765,7 +1787,7 @@ class MoveEntityInput(ToolInput):
     dy: float = Field(..., description="Y 方向位移（毫米），正上负下")
 
 
-@mcp.tool(
+@_tool(
     name="cad_move_entity",
     annotations={
         "title": "移动图元",
@@ -1790,14 +1812,14 @@ def cad_move_entity(params: MoveEntityInput) -> str:
         return _fail(e)
 
 
-class CopyEntityInput(ToolInput):
+class CopyEntityInput(SemanticToolInput):
     model_config = ConfigDict(str_strip_whitespace=True)
     handle: str = Field(..., description="要复制的图元句柄（从 cad_list_entities 获取）", min_length=1, max_length=40)
     dx: float = Field(..., description="副本 X 方向偏移（毫米），正右负左")
     dy: float = Field(..., description="副本 Y 方向偏移（毫米），正上负下")
 
 
-@mcp.tool(
+@_tool(
     name="cad_copy_entity",
     annotations={
         "title": "复制图元",
@@ -1831,7 +1853,7 @@ class RotateEntityInput(ToolInput):
     angle: float = Field(..., description="旋转角度（度，逆时针为正），如 90 顺时针用 -90", ge=-360, le=360)
 
 
-@mcp.tool(
+@_tool(
     name="cad_rotate_entity",
     annotations={
         "title": "旋转图元",
@@ -1859,7 +1881,7 @@ def cad_rotate_entity(params: RotateEntityInput) -> str:
         return _fail(e)
 
 
-class MirrorEntityInput(ToolInput):
+class MirrorEntityInput(SemanticToolInput):
     model_config = ConfigDict(str_strip_whitespace=True)
     handle: str = Field(..., description="要镜像的图元句柄", min_length=1, max_length=40)
     x1: float = Field(..., description="镜像线第一点 X")
@@ -1868,7 +1890,7 @@ class MirrorEntityInput(ToolInput):
     y2: float = Field(..., description="镜像线第二点 Y")
 
 
-@mcp.tool(
+@_tool(
     name="cad_mirror_entity",
     annotations={
         "title": "镜像图元",
@@ -1898,7 +1920,7 @@ def cad_mirror_entity(params: MirrorEntityInput) -> str:
 
 # ================= 工具：图块与图框 =================
 
-class MakeBlockInput(ToolInput):
+class MakeBlockInput(SemanticToolInput):
     model_config = ConfigDict(str_strip_whitespace=True)
     name: str = Field(..., description="图块名（英文或拼音，如 PUMP1、TANK_A）", min_length=1, max_length=40)
     handles: List[str] = Field(..., description="要打包成块的图元句柄列表（从 cad_list_entities 获取）", min_length=1, max_length=10_000)
@@ -1910,7 +1932,7 @@ class MakeBlockInput(ToolInput):
     )
 
 
-@mcp.tool(
+@_tool(
     name="cad_make_block",
     annotations={
         "title": "把图元打包成图块",
@@ -1954,7 +1976,7 @@ class BlockFieldBindingInput(ToolInput):
     update_on_regen: bool = True
 
 
-class InsertBlockInput(ToolInput):
+class InsertBlockInput(SemanticToolInput):
     model_config = ConfigDict(str_strip_whitespace=True)
     name: str = Field(..., description="图块名（须先用 cad_make_block 创建）", min_length=1, max_length=40)
     x: float = Field(..., description="插入点 X（毫米）")
@@ -1982,7 +2004,7 @@ class InsertBlockInput(ToolInput):
         return self
 
 
-@mcp.tool(
+@_tool(
     name="cad_insert_block",
     annotations={
         "title": "插入图块",
@@ -2019,7 +2041,7 @@ def cad_insert_block(params: InsertBlockInput) -> str:
         return _fail(e)
 
 
-class DrawTitleBlockInput(ToolInput):
+class DrawTitleBlockInput(SemanticToolInput):
     model_config = ConfigDict(str_strip_whitespace=True)
     width: float = Field(default=420, description="图框宽度（毫米）。指定 size 时自动按标准幅面，无需填", gt=100, le=20000)
     height: float = Field(default=297, description="图框高度（毫米）。指定 size 时自动按标准幅面，无需填", gt=100, le=20000)
@@ -2035,7 +2057,7 @@ class DrawTitleBlockInput(ToolInput):
     layer: Optional[str] = Field(default="TITLE", description="图框图层名，默认 TITLE")
 
 
-@mcp.tool(
+@_tool(
     name="cad_draw_title_block",
     annotations={
         "title": "画工程图框+标题栏",
@@ -2068,7 +2090,7 @@ def cad_draw_title_block(params: DrawTitleBlockInput) -> str:
 
 # ================= 工具：批量布置、检查、出图 =================
 
-class ArrayRectInput(ToolInput):
+class ArrayRectInput(SemanticToolInput):
     model_config = ConfigDict(str_strip_whitespace=True)
     handles: List[str] = Field(..., description="要阵列的图元句柄列表；acad 模式对每个原件调用一次原生阵列", min_length=1, max_length=100)
     rows: int = Field(..., description="行数（Y 方向），至少 1", ge=1, le=200)
@@ -2084,7 +2106,7 @@ class ArrayRectInput(ToolInput):
         return self
 
 
-@mcp.tool(
+@_tool(
     name="cad_array_rect",
     annotations={
         "title": "矩形阵列",
@@ -2114,7 +2136,7 @@ def cad_array_rect(params: ArrayRectInput) -> str:
         return _fail(e)
 
 
-class ArrayPolarInput(ToolInput):
+class ArrayPolarInput(SemanticToolInput):
     model_config = ConfigDict(str_strip_whitespace=True)
     handles: List[str] = Field(..., description="要阵列的图元句柄列表；acad 模式使用原生环形阵列", min_length=1, max_length=100)
     cx: float = Field(..., description="阵列圆心 X（毫米）")
@@ -2128,7 +2150,7 @@ class ArrayPolarInput(ToolInput):
         return self
 
 
-@mcp.tool(
+@_tool(
     name="cad_array_polar",
     annotations={
         "title": "环形阵列",
@@ -2156,7 +2178,7 @@ def cad_array_polar(params: ArrayPolarInput) -> str:
         return _fail(e)
 
 
-class DrawCenterlineInput(ToolInput):
+class DrawCenterlineInput(SemanticToolInput):
     model_config = ConfigDict(str_strip_whitespace=True)
     x1: float = Field(..., description="构件包络矩形第一角点 X（毫米）")
     y1: float = Field(..., description="构件包络矩形第一角点 Y（毫米）")
@@ -2165,7 +2187,7 @@ class DrawCenterlineInput(ToolInput):
     layer: Optional[str] = Field(default="CENTER", description="中心线图层，默认 CENTER（自动设为红色点划线）")
 
 
-@mcp.tool(
+@_tool(
     name="cad_draw_centerline",
     annotations={
         "title": "画对称中心线",
@@ -2193,14 +2215,14 @@ def cad_draw_centerline(params: DrawCenterlineInput) -> str:
         return _fail(e)
 
 
-class OffsetInput(ToolInput):
+class OffsetInput(SemanticToolInput):
     model_config = ConfigDict(str_strip_whitespace=True)
     handle: str = Field(..., description="要偏移的曲线句柄", min_length=1, max_length=40)
     distance: float = Field(
         ..., description="有符号偏移距离（毫米），不能为 0；闭合曲线正值向外、负值向内")
 
 
-@mcp.tool(
+@_tool(
     name="cad_offset",
     annotations={
         "title": "曲线几何偏移",
@@ -2232,7 +2254,7 @@ def cad_offset(params: OffsetInput) -> str:
         return _fail(e)
 
 
-class CopyLinearInput(ToolInput):
+class CopyLinearInput(SemanticToolInput):
     model_config = ConfigDict(str_strip_whitespace=True)
     handles: List[str] = Field(..., description="要线性复制的图元句柄列表", min_length=1, max_length=100)
     dx: float = Field(..., description="每份副本的 X 位移（毫米），第 i 份偏移 dx*i")
@@ -2249,7 +2271,7 @@ class CopyLinearInput(ToolInput):
         return self
 
 
-@mcp.tool(
+@_tool(
     name="cad_copy_linear",
     annotations={
         "title": "线性等距复制",
@@ -2277,7 +2299,7 @@ class CheckDrawingInput(ToolInput):
     tolerance: Optional[float] = Field(default=None, description="容差（毫米）：线端点距离小于此值判为断线/重合。留空自动按图纸范围算（对角线 0.1%）", gt=0, le=100000)
 
 
-@mcp.tool(
+@_tool(
     name="cad_check_drawing",
     annotations={
         "title": "图面体检",
@@ -2310,7 +2332,7 @@ class ExportPdfInput(ToolInput):
     filename: str = Field(..., description="PDF 文件名，如 '沉淀池平面图.pdf'（不写扩展名自动补 .pdf）", min_length=1, max_length=120)
 
 
-@mcp.tool(
+@_tool(
     name="cad_export_pdf",
     annotations={
         "title": "导出 PDF 打印稿",
@@ -2342,7 +2364,7 @@ def cad_export_pdf(params: ExportPdfInput) -> str:
         return _fail(e)
 
 
-class DrawTableInput(ToolInput):
+class DrawTableInput(SemanticToolInput):
     model_config = ConfigDict(str_strip_whitespace=True)
     origin_x: float = Field(..., description="表格左上角 X（毫米）")
     origin_y: float = Field(..., description="表格左上角 Y（毫米），表格向上排列")
@@ -2359,7 +2381,7 @@ class DrawTableInput(ToolInput):
         return self
 
 
-@mcp.tool(
+@_tool(
     name="cad_draw_table",
     annotations={
         "title": "画表格",
@@ -2398,7 +2420,7 @@ class LoadDraftingProfileInput(ToolInput):
     path: str = Field(min_length=1, max_length=1000)
 
 
-@mcp.tool(
+@_tool(
     name="cad_load_drafting_profile",
     annotations={"title": "加载外置制图标准配置", "readOnlyHint": True,
                  "destructiveHint": False, "idempotentHint": True,
@@ -2420,7 +2442,7 @@ class ListDraftingProfilesInput(ToolInput):
     model_config = ConfigDict(extra="forbid")
 
 
-@mcp.tool(
+@_tool(
     name="cad_list_drafting_profiles",
     annotations={"title": "列出已加载制图标准配置", "readOnlyHint": True,
                  "destructiveHint": False, "idempotentHint": True,
@@ -2441,7 +2463,7 @@ class LoadEnvironmentRuleSetInput(ToolInput):
     path: str = Field(min_length=1, max_length=1000)
 
 
-@mcp.tool(
+@_tool(
     name="cad_load_environment_rule_set",
     annotations={"title": "加载外置环境工程规则集", "readOnlyHint": True,
                  "destructiveHint": False, "idempotentHint": True,
@@ -2462,7 +2484,7 @@ class ListEnvironmentRuleSetsInput(ToolInput):
     model_config = ConfigDict(extra="forbid")
 
 
-@mcp.tool(
+@_tool(
     name="cad_list_environment_rule_sets",
     annotations={"title": "列出已加载环境工程规则集", "readOnlyHint": True,
                  "destructiveHint": False, "idempotentHint": True,
@@ -2490,7 +2512,7 @@ class ValidateEnvironmentModelInput(ToolInput):
         return self
 
 
-@mcp.tool(
+@_tool(
     name="cad_validate_environment_model",
     annotations={"title": "检查环境工程语义模型", "readOnlyHint": True,
                  "destructiveHint": False, "idempotentHint": True,
@@ -2527,7 +2549,7 @@ class PreviewEnvironmentDrawingInput(ToolInput):
         return self
 
 
-@mcp.tool(
+@_tool(
     name="cad_preview_environment_drawing",
     annotations={"title": "预检环境工程制图计划", "readOnlyHint": True,
                  "destructiveHint": False, "idempotentHint": True,
@@ -2621,7 +2643,7 @@ def _difference_preview(difference: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-@mcp.tool(
+@_tool(
     name="cad_apply_environment_drawing",
     annotations={"title": "同步环境工程模型到 CAD", "readOnlyHint": False,
                  "destructiveHint": True, "idempotentHint": True,
@@ -2653,8 +2675,53 @@ def cad_apply_environment_drawing(params: ApplyEnvironmentDrawingInput) -> str:
                 "changes": _difference_preview(difference),
                 "operation_count": len(plan.operations), "warnings": plan.warnings,
             })
+        if _SETTINGS.semantic_policy == "strict":
+            for obj in model_objects(params.model):
+                register_object(backend, obj)
         result = backend.apply_operation_plan(plan, params.policy)
         return _ok({"ok": True, "dry_run": False, **result})
+    except Exception as e:
+        return _fail(e)
+
+
+class RegisterSemanticObjectInput(ToolInput):
+    object: SemanticObject
+
+
+@_tool(name="cad_register_semantic_object", annotations={
+    "title": "登记工程对象身份", "readOnlyHint": False,
+    "destructiveHint": False, "idempotentHint": True, "openWorldHint": False})
+def cad_register_semantic_object(params: RegisterSemanticObjectInput) -> str:
+    """先登记对象的编号、名称、类型和来源；不同内容的同编号登记会被拒绝，不自动保存。"""
+    try:
+        created = register_object(_get_backend(), params.object)
+        return _ok({"ok": True, "created": created, "object": params.object.model_dump()})
+    except Exception as e:
+        return _fail(e)
+
+
+@_tool(name="cad_get_entity_semantics", annotations={
+    "title": "读取图元工程含义", "readOnlyHint": True,
+    "destructiveHint": False, "idempotentHint": True, "openWorldHint": False})
+def cad_get_entity_semantics(params: GetEntityPropertiesInput) -> str:
+    """读取登记的含义、来源、当前状态；不会根据形状猜测工程用途。"""
+    try:
+        return _ok({"ok": True, **semantic_report(_get_backend(), params.handle)})
+    except Exception as e:
+        return _fail(e)
+
+
+class CheckSemanticsInput(ToolInput):
+    pass
+
+
+@_tool(name="cad_check_semantics", annotations={
+    "title": "检查语义登记与人工修改", "readOnlyHint": True,
+    "destructiveHint": False, "idempotentHint": True, "openWorldHint": False})
+def cad_check_semantics(params: CheckSemanticsInput) -> str:
+    """扫描模型与纸空间的未登记、失联、冲突、重复身份和已修改图元；只报告，不回补。"""
+    try:
+        return _ok({"ok": True, **semantic_report(_get_backend())})
     except Exception as e:
         return _fail(e)
 
@@ -2663,7 +2730,7 @@ class ListManagedEntitiesInput(ToolInput):
     model_config = ConfigDict(str_strip_whitespace=True)
 
 
-@mcp.tool(
+@_tool(
     name="cad_list_managed_entities",
     annotations={"title": "列出 MCP 管理的工程对象", "readOnlyHint": True,
                  "destructiveHint": False, "idempotentHint": True,
@@ -2686,7 +2753,7 @@ class SaveAsInput(ToolInput):
     overwrite: bool = False
 
 
-@mcp.tool(name="cad_save_as", annotations={"title": "另存当前图纸",
+@_tool(name="cad_save_as", annotations={"title": "另存当前图纸",
            "readOnlyHint": False, "destructiveHint": False,
            "idempotentHint": False, "openWorldHint": False})
 def cad_save_as(params: SaveAsInput) -> str:
@@ -2706,7 +2773,7 @@ class CloneTemplateDrawingInput(ToolInput):
     overwrite: bool = False
 
 
-@mcp.tool(name="cad_clone_template_drawing", annotations={"title": "从 DWG 模板创建工作副本",
+@_tool(name="cad_clone_template_drawing", annotations={"title": "从 DWG 模板创建工作副本",
            "readOnlyHint": False, "destructiveHint": False,
            "idempotentHint": False, "openWorldHint": False})
 def cad_clone_template_drawing(params: CloneTemplateDrawingInput) -> str:
@@ -2724,7 +2791,7 @@ class InspectTemplateDrawingInput(ToolInput):
                              min_length=1, max_length=1000)
 
 
-@mcp.tool(name="cad_inspect_template_drawing", annotations={
+@_tool(name="cad_inspect_template_drawing", annotations={
            "title": "只读检查 DWG 模板资产", "readOnlyHint": True,
            "destructiveHint": False, "idempotentHint": True, "openWorldHint": False})
 def cad_inspect_template_drawing(params: InspectTemplateDrawingInput) -> str:
@@ -2742,7 +2809,7 @@ class TemplateManifestPathInput(ToolInput):
     manifest_path: str = Field(min_length=1, max_length=1000)
 
 
-@mcp.tool(name="cad_verify_template_manifest", annotations={"title": "核验模板清单和源 DWG",
+@_tool(name="cad_verify_template_manifest", annotations={"title": "核验模板清单和源 DWG",
            "readOnlyHint": True, "destructiveHint": False,
            "idempotentHint": True, "openWorldHint": False})
 def cad_verify_template_manifest(params: TemplateManifestPathInput) -> str:
@@ -2755,7 +2822,7 @@ def cad_verify_template_manifest(params: TemplateManifestPathInput) -> str:
         return _fail(e)
 
 
-@mcp.tool(name="cad_load_template_manifest", annotations={"title": "加载模板资产清单",
+@_tool(name="cad_load_template_manifest", annotations={"title": "加载模板资产清单",
            "readOnlyHint": True, "destructiveHint": False,
            "idempotentHint": True, "openWorldHint": False})
 def cad_load_template_manifest(params: TemplateManifestPathInput) -> str:
@@ -2777,7 +2844,7 @@ class EvaluateTemplateSheetScalesInput(ToolInput):
     annotation_padding_model: float = Field(default=0, ge=0)
 
 
-@mcp.tool(name="cad_evaluate_template_sheet_scales", annotations={
+@_tool(name="cad_evaluate_template_sheet_scales", annotations={
            "title": "按固定模板图框校核比例", "readOnlyHint": True,
            "destructiveHint": False, "idempotentHint": True, "openWorldHint": False})
 def cad_evaluate_template_sheet_scales(params: EvaluateTemplateSheetScalesInput) -> str:
@@ -2793,13 +2860,13 @@ def cad_evaluate_template_sheet_scales(params: EvaluateTemplateSheetScalesInput)
         return _fail(e)
 
 
-class CreateLayoutInput(ToolInput):
+class CreateLayoutInput(SemanticToolInput):
     model_config = ConfigDict(str_strip_whitespace=True)
     name: str = Field(min_length=1, max_length=120)
     replace: bool = False
 
 
-@mcp.tool(name="cad_create_layout", annotations={"title": "创建纸空间布局",
+@_tool(name="cad_create_layout", annotations={"title": "创建纸空间布局",
            "readOnlyHint": False, "destructiveHint": True,
            "idempotentHint": True, "openWorldHint": False})
 def cad_create_layout(params: CreateLayoutInput) -> str:
@@ -2812,7 +2879,7 @@ def cad_create_layout(params: CreateLayoutInput) -> str:
         return _fail(e)
 
 
-class InsertTemplateSheetInput(ToolInput):
+class InsertTemplateSheetInput(SemanticToolInput):
     model_config = ConfigDict(str_strip_whitespace=True)
     template_id: str
     sheet_id: str
@@ -2821,7 +2888,7 @@ class InsertTemplateSheetInput(ToolInput):
     y: float = 0
 
 
-@mcp.tool(name="cad_insert_template_sheet", annotations={"title": "插入原始模板图框",
+@_tool(name="cad_insert_template_sheet", annotations={"title": "插入原始模板图框",
            "readOnlyHint": False, "destructiveHint": False,
            "idempotentHint": False, "openWorldHint": False})
 def cad_insert_template_sheet(params: InsertTemplateSheetInput) -> str:
@@ -2844,7 +2911,7 @@ class FillTemplateFieldsInput(ToolInput):
     layer: str = "ENV-ANNO"
 
 
-@mcp.tool(name="cad_fill_template_fields", annotations={"title": "填写模板标题栏字段",
+@_tool(name="cad_fill_template_fields", annotations={"title": "填写模板标题栏字段",
            "readOnlyHint": False, "destructiveHint": False,
            "idempotentHint": False, "openWorldHint": False})
 def cad_fill_template_fields(params: FillTemplateFieldsInput) -> str:
@@ -2859,7 +2926,7 @@ def cad_fill_template_fields(params: FillTemplateFieldsInput) -> str:
         return _fail(e)
 
 
-class CreateViewportInput(ToolInput):
+class CreateViewportInput(SemanticToolInput):
     model_config = ConfigDict(str_strip_whitespace=True)
     layout_name: str
     center_x: float
@@ -2872,7 +2939,7 @@ class CreateViewportInput(ToolInput):
     lock: bool = True
 
 
-@mcp.tool(name="cad_create_viewport", annotations={"title": "创建并锁定布局视口",
+@_tool(name="cad_create_viewport", annotations={"title": "创建并锁定布局视口",
            "readOnlyHint": False, "destructiveHint": False,
            "idempotentHint": False, "openWorldHint": False})
 def cad_create_viewport(params: CreateViewportInput) -> str:
@@ -2914,7 +2981,7 @@ class ConfigureLayoutPlotInput(ToolInput):
         return self
 
 
-@mcp.tool(name="cad_configure_layout_plot", annotations={"title": "配置布局精确出图",
+@_tool(name="cad_configure_layout_plot", annotations={"title": "配置布局精确出图",
            "readOnlyHint": False, "destructiveHint": False,
            "idempotentHint": True, "openWorldHint": False})
 def cad_configure_layout_plot(params: ConfigureLayoutPlotInput) -> str:
@@ -2939,7 +3006,7 @@ class PublishLayoutPdfInput(ToolInput):
     filename: str
 
 
-@mcp.tool(name="cad_publish_layout_pdf", annotations={"title": "按布局发布 PDF",
+@_tool(name="cad_publish_layout_pdf", annotations={"title": "按布局发布 PDF",
            "readOnlyHint": False, "destructiveHint": False,
            "idempotentHint": False, "openWorldHint": False})
 def cad_publish_layout_pdf(params: PublishLayoutPdfInput) -> str:
@@ -2953,7 +3020,7 @@ def cad_publish_layout_pdf(params: PublishLayoutPdfInput) -> str:
         return _fail(e)
 
 
-class DrawMTextInput(ToolInput):
+class DrawMTextInput(SemanticToolInput):
     model_config = ConfigDict(str_strip_whitespace=True)
     text: str = Field(min_length=1, max_length=10000)
     x: float
@@ -2964,7 +3031,7 @@ class DrawMTextInput(ToolInput):
     layer: Optional[str] = None
 
 
-@mcp.tool(name="cad_draw_mtext", annotations={"title": "绘制原生多行文字",
+@_tool(name="cad_draw_mtext", annotations={"title": "绘制原生多行文字",
            "readOnlyHint": False, "destructiveHint": False,
            "idempotentHint": False, "openWorldHint": False})
 def cad_draw_mtext(params: DrawMTextInput) -> str:
@@ -2996,7 +3063,7 @@ class SetDrawingSettingsInput(ToolInput):
     display_lineweights: bool = True
 
 
-@mcp.tool(name="cad_set_drawing_settings", annotations={"title": "设置 DWT 图纸环境",
+@_tool(name="cad_set_drawing_settings", annotations={"title": "设置 DWT 图纸环境",
            "readOnlyHint": False, "destructiveHint": False,
            "idempotentHint": True, "openWorldHint": False})
 def cad_set_drawing_settings(params: SetDrawingSettingsInput) -> str:
@@ -3012,7 +3079,7 @@ class ListDimstylesInput(ToolInput):
     pass
 
 
-@mcp.tool(name="cad_list_dimstyles", annotations={"title": "列出尺寸样式详情",
+@_tool(name="cad_list_dimstyles", annotations={"title": "列出尺寸样式详情",
            "readOnlyHint": True, "destructiveHint": False,
            "idempotentHint": True, "openWorldHint": False})
 def cad_list_dimstyles(params: ListDimstylesInput) -> str:
@@ -3027,7 +3094,7 @@ class ListLayoutsDetailedInput(ToolInput):
     pass
 
 
-@mcp.tool(name="cad_list_layouts_detailed", annotations={"title": "列出布局和出图设置",
+@_tool(name="cad_list_layouts_detailed", annotations={"title": "列出布局和出图设置",
            "readOnlyHint": True, "destructiveHint": False,
            "idempotentHint": True, "openWorldHint": False})
 def cad_list_layouts_detailed(params: ListLayoutsDetailedInput) -> str:
@@ -3041,7 +3108,7 @@ class GetPlotEnvironmentInput(ToolInput):
     pass
 
 
-@mcp.tool(name="cad_get_plot_environment", annotations={"title": "读取实际打印资源",
+@_tool(name="cad_get_plot_environment", annotations={"title": "读取实际打印资源",
            "readOnlyHint": True, "destructiveHint": False,
            "idempotentHint": True, "openWorldHint": True})
 def cad_get_plot_environment(params: GetPlotEnvironmentInput) -> str:
@@ -3056,7 +3123,7 @@ class ListPageSetupsInput(ToolInput):
     pass
 
 
-@mcp.tool(name="cad_list_page_setups", annotations={"title": "列出命名页面设置",
+@_tool(name="cad_list_page_setups", annotations={"title": "列出命名页面设置",
            "readOnlyHint": True, "destructiveHint": False,
            "idempotentHint": True, "openWorldHint": False})
 def cad_list_page_setups(params: ListPageSetupsInput) -> str:
@@ -3072,7 +3139,7 @@ class ConvertPlotStyleModeInput(ToolInput):
     dry_run: bool = True
 
 
-@mcp.tool(name="cad_convert_plot_style_mode", annotations={"title": "检查或转换 CTB/STB 模式",
+@_tool(name="cad_convert_plot_style_mode", annotations={"title": "检查或转换 CTB/STB 模式",
            "readOnlyHint": False, "destructiveHint": True,
            "idempotentHint": True, "openWorldHint": False})
 def cad_convert_plot_style_mode(params: ConvertPlotStyleModeInput) -> str:
@@ -3090,7 +3157,7 @@ class RenameLayoutInput(ToolInput):
     new_name: str = Field(min_length=1, max_length=255)
 
 
-@mcp.tool(name="cad_rename_layout", annotations={"title": "重命名布局",
+@_tool(name="cad_rename_layout", annotations={"title": "重命名布局",
            "readOnlyHint": False, "destructiveHint": False,
            "idempotentHint": False, "openWorldHint": False})
 def cad_rename_layout(params: RenameLayoutInput) -> str:
@@ -3128,7 +3195,7 @@ class CreateOrUpdatePageSetupInput(ToolInput):
     replace: bool = False
 
 
-@mcp.tool(name="cad_create_or_update_page_setup", annotations={"title": "创建或更新命名页面设置",
+@_tool(name="cad_create_or_update_page_setup", annotations={"title": "创建或更新命名页面设置",
            "readOnlyHint": False, "destructiveHint": False,
            "idempotentHint": True, "openWorldHint": True})
 def cad_create_or_update_page_setup(params: CreateOrUpdatePageSetupInput) -> str:
@@ -3146,7 +3213,7 @@ class PreviewDwtProfileInput(ToolInput):
     preserve_unmanaged: bool = True
 
 
-@mcp.tool(name="cad_preview_dwt_profile", annotations={"title": "预览 DWT 配置计划",
+@_tool(name="cad_preview_dwt_profile", annotations={"title": "预览 DWT 配置计划",
            "readOnlyHint": True, "destructiveHint": False,
            "idempotentHint": True, "openWorldHint": True})
 def cad_preview_dwt_profile(params: PreviewDwtProfileInput) -> str:
@@ -3166,7 +3233,7 @@ def cad_preview_dwt_profile(params: PreviewDwtProfileInput) -> str:
         return _fail(e)
 
 
-class ApplyDwtProfileInput(ToolInput):
+class ApplyDwtProfileInput(SemanticToolInput):
     profile_path: str = Field(min_length=1, max_length=2000)
     target_drawing: Optional[str] = Field(default=None, min_length=1, max_length=2000)
     dry_run: bool = True
@@ -3175,7 +3242,7 @@ class ApplyDwtProfileInput(ToolInput):
     confirmation_token: Optional[str] = Field(default=None, min_length=1, max_length=80)
 
 
-@mcp.tool(name="cad_apply_dwt_profile", annotations={"title": "预览或应用 DWT 配置",
+@_tool(name="cad_apply_dwt_profile", annotations={"title": "预览或应用 DWT 配置",
            "readOnlyHint": False, "destructiveHint": True,
            "idempotentHint": True, "openWorldHint": True})
 def cad_apply_dwt_profile(params: ApplyDwtProfileInput) -> str:
@@ -3206,7 +3273,7 @@ class ValidateDwtProfileInput(ToolInput):
     preserve_unmanaged: bool = True
 
 
-@mcp.tool(name="cad_validate_dwt_profile", annotations={"title": "校验当前图纸的 DWT 配置",
+@_tool(name="cad_validate_dwt_profile", annotations={"title": "校验当前图纸的 DWT 配置",
            "readOnlyHint": True, "destructiveHint": False,
            "idempotentHint": True, "openWorldHint": True})
 def cad_validate_dwt_profile(params: ValidateDwtProfileInput) -> str:
@@ -3230,7 +3297,7 @@ class RenameLayerInput(ToolInput):
     new_name: str = Field(min_length=1, max_length=255)
 
 
-@mcp.tool(name="cad_rename_layer", annotations={"title": "重命名图层",
+@_tool(name="cad_rename_layer", annotations={"title": "重命名图层",
            "readOnlyHint": False, "destructiveHint": False,
            "idempotentHint": False, "openWorldHint": False})
 def cad_rename_layer(params: RenameLayerInput) -> str:
@@ -3253,7 +3320,7 @@ class DeleteLayerInput(ToolInput):
         return self
 
 
-@mcp.tool(name="cad_delete_layer", annotations={"title": "预览或删除图层",
+@_tool(name="cad_delete_layer", annotations={"title": "预览或删除图层",
            "readOnlyHint": False, "destructiveHint": True,
            "idempotentHint": True, "openWorldHint": False})
 def cad_delete_layer(params: DeleteLayerInput) -> str:
@@ -3274,7 +3341,7 @@ class DeleteLayoutInput(ToolInput):
     dry_run: bool = True
 
 
-@mcp.tool(name="cad_delete_layout", annotations={"title": "预览或删除布局",
+@_tool(name="cad_delete_layout", annotations={"title": "预览或删除布局",
            "readOnlyHint": False, "destructiveHint": True,
            "idempotentHint": True, "openWorldHint": False})
 def cad_delete_layout(params: DeleteLayoutInput) -> str:
@@ -3310,7 +3377,7 @@ class CreateOrUpdateAttributeBlockInput(ToolInput):
     annotative: bool = False
 
 
-@mcp.tool(name="cad_create_or_update_attribute_block", annotations={"title": "创建带属性定义的块",
+@_tool(name="cad_create_or_update_attribute_block", annotations={"title": "创建带属性定义的块",
            "readOnlyHint": False, "destructiveHint": True,
            "idempotentHint": True, "openWorldHint": False})
 def cad_create_or_update_attribute_block(params: CreateOrUpdateAttributeBlockInput) -> str:
@@ -3344,7 +3411,7 @@ class SetBlockAttributesInput(ToolInput):
     values: Dict[str, str] = Field(max_length=256)
 
 
-@mcp.tool(name="cad_set_block_attributes", annotations={"title": "填写块属性",
+@_tool(name="cad_set_block_attributes", annotations={"title": "填写块属性",
            "readOnlyHint": False, "destructiveHint": False,
            "idempotentHint": True, "openWorldHint": False})
 def cad_set_block_attributes(params: SetBlockAttributesInput) -> str:
@@ -3369,13 +3436,13 @@ class BindBlockAttributeFieldInput(ToolInput):
     update_on_regen: bool = True
 
 
-@mcp.tool(name="cad_bind_block_attribute_field", annotations={"title": "绑定块属性到 AutoCAD 字段",
+@_tool(name="cad_bind_block_attribute_field", annotations={"title": "绑定块属性到 AutoCAD 字段",
            "readOnlyHint": False, "destructiveHint": False,
            "idempotentHint": True, "openWorldHint": False})
 def cad_bind_block_attribute_field(params: BindBlockAttributeFieldInput) -> str:
     try:
         return _ok({"ok": True, **_get_backend().bind_block_attribute_field(
-            **params.model_dump(mode="python")
+            **params.model_dump(mode="python", exclude={"semantic"})
         )})
     except Exception as e:
         return _fail(e)
@@ -3391,7 +3458,7 @@ class ImportBlockDefinitionsInput(ToolInput):
     dry_run: bool = True
 
 
-@mcp.tool(name="cad_import_block_definitions", annotations={"title": "从外部 DWG 导入块定义",
+@_tool(name="cad_import_block_definitions", annotations={"title": "从外部 DWG 导入块定义",
            "readOnlyHint": False, "destructiveHint": True,
            "idempotentHint": True, "openWorldHint": True})
 def cad_import_block_definitions(params: ImportBlockDefinitionsInput) -> str:
@@ -3436,7 +3503,7 @@ class ExportBlockLibraryInput(ToolInput):
     dry_run: bool = True
 
 
-@mcp.tool(name="cad_export_block_library", annotations={"title": "预览或导出 DWG 块库",
+@_tool(name="cad_export_block_library", annotations={"title": "预览或导出 DWG 块库",
            "readOnlyHint": False, "destructiveHint": True,
            "idempotentHint": False, "openWorldHint": True})
 def cad_export_block_library(params: ExportBlockLibraryInput) -> str:
@@ -3455,7 +3522,7 @@ class InspectBlockLibraryInput(ToolInput):
     source_path: str = Field(min_length=1, max_length=2000)
 
 
-@mcp.tool(name="cad_inspect_block_library", annotations={"title": "检查外部 DWG 块库",
+@_tool(name="cad_inspect_block_library", annotations={"title": "检查外部 DWG 块库",
            "readOnlyHint": True, "destructiveHint": False,
            "idempotentHint": True, "openWorldHint": True})
 def cad_inspect_block_library(params: InspectBlockLibraryInput) -> str:
@@ -3485,7 +3552,7 @@ class AuditBlockDefinitionInput(ToolInput):
     )
 
 
-@mcp.tool(name="cad_audit_block_definition", annotations={"title": "按规格卡审查指定 DWG 块",
+@_tool(name="cad_audit_block_definition", annotations={"title": "按规格卡审查指定 DWG 块",
            "readOnlyHint": True, "destructiveHint": False,
            "idempotentHint": True, "openWorldHint": True})
 def cad_audit_block_definition(params: AuditBlockDefinitionInput) -> str:
@@ -3500,7 +3567,7 @@ def cad_audit_block_definition(params: AuditBlockDefinitionInput) -> str:
         return _fail(e)
 
 
-class InsertCoordinateLabelInput(ToolInput):
+class InsertCoordinateLabelInput(SemanticToolInput):
     target_x: float
     target_y: float
     target_handle: Optional[str] = Field(default=None, min_length=1, max_length=40)
@@ -3513,19 +3580,19 @@ class InsertCoordinateLabelInput(ToolInput):
     text_style: Optional[str] = Field(default=None, min_length=1, max_length=255)
 
 
-@mcp.tool(name="cad_insert_coordinate_label", annotations={"title": "插入坐标属性块标注",
+@_tool(name="cad_insert_coordinate_label", annotations={"title": "插入坐标属性块标注",
            "readOnlyHint": False, "destructiveHint": False,
            "idempotentHint": False, "openWorldHint": False})
 def cad_insert_coordinate_label(params: InsertCoordinateLabelInput) -> str:
     try:
         return _ok({"ok": True, **_get_backend().insert_coordinate_label(
-            **params.model_dump(mode="python")
+            **params.model_dump(mode="python", exclude={"semantic"})
         )})
     except Exception as e:
         return _fail(e)
 
 
-class InsertElevationLabelInput(ToolInput):
+class InsertElevationLabelInput(SemanticToolInput):
     target_point: List[float] = Field(min_length=2, max_length=3)
     target_handle: Optional[str] = Field(default=None, min_length=1, max_length=40)
     elevation_source: str = Field(default="auto", min_length=1, max_length=80)
@@ -3540,13 +3607,13 @@ class InsertElevationLabelInput(ToolInput):
     zero_format: str = Field(default="0.000", min_length=1, max_length=40)
 
 
-@mcp.tool(name="cad_insert_elevation_label", annotations={"title": "插入标高属性块标注",
+@_tool(name="cad_insert_elevation_label", annotations={"title": "插入标高属性块标注",
            "readOnlyHint": False, "destructiveHint": False,
            "idempotentHint": False, "openWorldHint": False})
 def cad_insert_elevation_label(params: InsertElevationLabelInput) -> str:
     try:
         return _ok({"ok": True, **_get_backend().insert_elevation_label(
-            **params.model_dump(mode="python")
+            **params.model_dump(mode="python", exclude={"semantic"})
         )})
     except Exception as e:
         return _fail(e)
@@ -3562,13 +3629,13 @@ class CreateOrUpdateCtbInput(ToolInput):
     dry_run: bool = True
 
 
-@mcp.tool(name="cad_create_or_update_ctb", annotations={"title": "检查 CTB 创建请求",
+@_tool(name="cad_create_or_update_ctb", annotations={"title": "检查 CTB 创建请求",
            "readOnlyHint": False, "destructiveHint": True,
            "idempotentHint": True, "openWorldHint": True})
 def cad_create_or_update_ctb(params: CreateOrUpdateCtbInput) -> str:
     try:
         return _ok({"ok": True, **_get_backend().create_or_update_ctb(
-            **params.model_dump(mode="python")
+            **params.model_dump(mode="python", exclude={"semantic"})
         )})
     except Exception as e:
         return _fail(e)
@@ -3584,7 +3651,7 @@ class SwitchModeInput(ToolInput):
     )
 
 
-@mcp.tool(
+@_tool(
     name="cad_switch_mode",
     annotations={
         "title": "切换绘图模式",
@@ -3638,7 +3705,7 @@ class CloseDrawingInput(ToolInput):
     save: bool = Field(default=False, description="是否保存后关闭，默认 False（不保存直接关）")
 
 
-@mcp.tool(
+@_tool(
     name="cad_close_drawing",
     annotations={
         "title": "关闭当前图纸",
@@ -3671,7 +3738,7 @@ class QuitInput(ToolInput):
     pass
 
 
-@mcp.tool(
+@_tool(
     name="cad_quit",
     annotations={
         "title": "退出 AutoCAD",

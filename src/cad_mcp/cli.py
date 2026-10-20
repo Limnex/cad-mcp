@@ -22,6 +22,7 @@ FIELD_ALIASES = {
     "drawings-dir": "drawings_dir",
     "log-dir": "log_dir",
     "mode": "mode",
+    "semantic-policy": "semantic_policy",
 }
 
 

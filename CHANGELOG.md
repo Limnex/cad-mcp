@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Default MCP geometry creation to strict semantic identity: persist engineering object registrations inside drawings, require object/role bindings before direct drawing, and atomically create, attach and verify entity identity. Cover copy/array/block/layout and environment-model workflows through both toolsets; expose semantic reads and read-only audits. Add operator-only startup compatibility policy and block further writes after an unverified semantic rollback.
+
 - Extend entity property editing to planar ARC, LWPOLYLINE, INSERT, HATCH, ELLIPSE and POINT. Preserve elevations/Z scale, per-segment polyline data, hatch loops/holes/associativity, and attached attribute geometry. Add formatted attribute values and copy-on-write fixed/nested block text edits scoped to the selected instance; preflight unsupported dependencies and verify rollback removes cloned definitions.
 
 - Add `cad_get_entity_properties` and `cad_edit_entity_properties` for model-space entities in DXF and AutoCAD. Preview common appearance, TEXT/MTEXT content/height/rotation, LINE endpoints and CIRCLE center/radius; preflight resources and locked layers, verify readback and roll back failures without saving.

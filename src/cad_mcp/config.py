@@ -10,11 +10,12 @@ from typing import Mapping, Optional
 
 
 MAX_CONFIG_BYTES = 64 * 1024
-CONFIG_FIELDS = {"drawings_dir", "log_dir", "mode"}
+CONFIG_FIELDS = {"drawings_dir", "log_dir", "mode", "semantic_policy"}
 ENV_FIELDS = {
     "drawings_dir": "CAD_DRAWINGS_DIR",
     "log_dir": "CAD_LOG_DIR",
     "mode": "CAD_MODE",
+    "semantic_policy": "CAD_SEMANTIC_POLICY",
 }
 
 
@@ -28,12 +29,14 @@ class Settings:
     log_dir: Path
     mode: str
     config_path: Path
+    semantic_policy: str = "strict"
 
     def as_dict(self) -> dict[str, str]:
         return {
             "drawings_dir": str(self.drawings_dir),
             "log_dir": str(self.log_dir),
             "mode": self.mode,
+            "semantic_policy": self.semantic_policy,
             "config_path": str(self.config_path),
         }
 
@@ -72,6 +75,8 @@ def load_config(
         validated[key] = value.strip()
     if "mode" in validated and validated["mode"] not in {"dxf", "acad"}:
         raise ConfigError("mode 只能是 dxf 或 acad")
+    if validated.get("semantic_policy") not in {None, "strict", "legacy"}:
+        raise ConfigError("semantic_policy 只能是 strict 或 legacy")
     return validated
 
 
@@ -88,11 +93,15 @@ def load_settings(
     mode = values.get(ENV_FIELDS["mode"], stored.get("mode", "acad"))
     if mode not in {"dxf", "acad"}:
         raise ConfigError("CAD_MODE 只能是 dxf 或 acad")
+    semantic_policy = values.get(ENV_FIELDS["semantic_policy"], stored.get("semantic_policy", "strict"))
+    if semantic_policy not in {"strict", "legacy"}:
+        raise ConfigError("CAD_SEMANTIC_POLICY 只能是 strict 或 legacy")
     return Settings(
         drawings_dir=Path(drawings).expanduser(),
         log_dir=Path(logs).expanduser(),
         mode=mode,
         config_path=target,
+        semantic_policy=semantic_policy,
     )
 
 
@@ -123,6 +132,8 @@ def load_config_payload(values: Mapping[str, str]) -> dict[str, str]:
             raise ConfigError(f"配置字段 {key} 必须是非空字符串")
     if payload.get("mode") not in {None, "dxf", "acad"}:
         raise ConfigError("mode 只能是 dxf 或 acad")
+    if payload.get("semantic_policy") not in {None, "strict", "legacy"}:
+        raise ConfigError("semantic_policy 只能是 strict 或 legacy")
     return payload
 
 

@@ -7,10 +7,13 @@ DXF 使用内存文档快照。执行器本身只负责严格映射和附加语�
 from __future__ import annotations
 
 import math
+from uuid import uuid4
 from typing import Any, Dict, Iterable, List, Sequence
 
 from cad_mcp.core.contracts import CadOperation, DrawingPlan
-from cad_mcp.core.registry import metadata_for_operation, reconcile_plan
+from cad_mcp.core.registry import (
+    SEMANTIC_IDENTITY_FIELDS, metadata_for_operation, operation_fingerprint, reconcile_plan,
+)
 
 
 class UnsupportedPlanOperation(RuntimeError):
@@ -120,7 +123,10 @@ def execute_operation(
             )
             if hasattr(backend, "get_entity_state_hash"):
                 handle_metadata["materialized_hash"] = backend.get_entity_state_hash(handle)
+            handle_metadata["entity_uid"] = str(uuid4())
             backend.set_entity_metadata(handle, handle_metadata)
+            if backend.get_entity_metadata(handle) != handle_metadata:
+                raise RuntimeError(f"图元 {handle} 的语义身份回读失败")
     return {"kind": kind, "semantic_id": operation.semantic_id,
             "role": operation.role, "handles": handles, "result": result}
 
@@ -192,10 +198,32 @@ def execute_reconciled_plan(
         statistics=plan.statistics,
     )
     execution = execute_plan(backend, changed_plan)
+    metadata_updates = []
+    for unchanged in difference["unchanged"]:
+        operation = unchanged["operation"]
+        identity = {key: value for key, value in operation.metadata.items()
+                    if key in SEMANTIC_IDENTITY_FIELDS}
+        if not identity:
+            continue
+        fingerprint = operation_fingerprint(operation)
+        for handle in unchanged["handles"]:
+            before = backend.get_entity_metadata(handle)
+            if before is None:
+                raise RuntimeError(f"图元 {handle} 的既有身份记录无法读取")
+            after = {**before, **identity, "geometry_hash": fingerprint,
+                     "operation_group": fingerprint}
+            if not after.get("entity_uid"):
+                after["entity_uid"] = str(uuid4())
+            if after != before:
+                backend.set_entity_metadata(handle, after)
+                if backend.get_entity_metadata(handle) != after:
+                    raise RuntimeError(f"图元 {handle} 的身份记录原位更新回读失败")
+                metadata_updates.append(handle)
     return {
         "project_id": plan.project_id,
         "revision": plan.revision,
         "policy": policy,
         "difference": difference["statistics"],
         "execution": execution,
+        "metadata_updates": metadata_updates,
     }

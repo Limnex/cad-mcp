@@ -13,6 +13,11 @@ from cad_mcp.core.contracts import CadOperation, DrawingPlan
 XDATA_APP_NAME = "CAD_MCP_ENV"
 XDATA_SCHEMA_VERSION = 2
 XDATA_CHUNK_SIZE_BYTES = 240
+# Descriptive identity added by the semantic compiler must not invalidate the
+# pre-existing drawing-operation fingerprint and force a geometry replacement.
+SEMANTIC_IDENTITY_FIELDS = frozenset({
+    "semantic_name", "semantic_type", "semantic_source", "semantic_status", "parent_id",
+})
 
 
 def canonical_json(value: Any) -> str:
@@ -20,14 +25,15 @@ def canonical_json(value: Any) -> str:
                       separators=(",", ":"), default=str)
 
 
-def operation_fingerprint(operation: CadOperation) -> str:
+def operation_fingerprint(operation: CadOperation, *, include_identity_metadata: bool = False) -> str:
     payload = {
         "kind": operation.kind,
         "semantic_id": operation.semantic_id,
         "view_id": operation.view_id,
         "role": operation.role,
         "params": operation.params,
-        "metadata": operation.metadata,
+        "metadata": {key: value for key, value in operation.metadata.items()
+                     if include_identity_metadata or key not in SEMANTIC_IDENTITY_FIELDS},
     }
     return hashlib.sha256(canonical_json(payload).encode("utf-8")).hexdigest()
 
@@ -180,10 +186,13 @@ def reconcile_plan(
     # plan order when several operations share one semantic key.
     unmatched: List[tuple[CadOperation, str]] = []
     for operation, fingerprint in pending:
+        compatible_fingerprints = {
+            fingerprint, operation_fingerprint(operation, include_identity_metadata=True),
+        }
         exact = [
             record for record in indexed.get(operation_key(operation), [])
             if record.handle not in consumed_handles
-            and record.geometry_hash == fingerprint
+            and record.geometry_hash in compatible_fingerprints
         ]
         if not exact:
             unmatched.append((operation, fingerprint))

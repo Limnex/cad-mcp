@@ -3365,9 +3365,7 @@ class AcadBackend(AcadDwtMixin):
     def set_entity_metadata(self, handle: str, metadata: Dict[str, Any]) -> Dict[str, Any]:
         """把环境工程语义 ID 和摘要写入实体 XData。"""
         self._check_doc()
-        entity = self._find(handle)
-        if entity is None:
-            raise ValueError(f"未找到句柄为 {handle} 的图元")
+        entity = self.doc.HandleToObject(format(int(handle), "X"))
         self._ensure_xdata_app()
         chunks = pack_metadata(metadata)
         type_codes = [1001] + [1000] * len(chunks)
