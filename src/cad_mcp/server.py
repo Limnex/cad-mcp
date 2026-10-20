@@ -36,11 +36,13 @@ from cad_mcp.drawing.document import (
 from cad_mcp.core.geometry import (
     MAX_TABLE_COLUMNS,
     MAX_TABLE_ROWS,
+    validate_hatch_parameters,
     validate_bulk_creation,
     validate_diameter_dimension,
     validate_table_data,
 )
 from cad_mcp.drawing.autocad import AcadBackend
+from cad_mcp.drawing.hatch_regions import validate_handles
 from cad_mcp.core.compiler import ModelValidationError, compile_environment_model
 from cad_mcp.core.contracts import (
     CadOperation,
@@ -692,20 +694,43 @@ def cad_draw_polyline(params: DrawPolylineInput) -> str:
 
 class DrawHatchInput(ToolInput):
     model_config = ConfigDict(str_strip_whitespace=True)
-    points: List[Tuple[float, float]] = Field(
-        ...,
-        description="填充边界顶点（闭合区域），至少 3 个点，如 [[0,0],[1000,0],[1000,1000],[0,1000]]",
-        min_length=3,
-        max_length=10_000,
+    boundary_handle: Optional[str] = Field(
+        default=None,
+        description="单个已有闭合边界的十进制句柄；与 boundary_handles 二选一，不接受顶点列表",
+        min_length=1,
+        max_length=40,
+        pattern=r"^[0-9]+$",
     )
-    scale: float = Field(default=1.0, description="填充线间距比例，默认 1.0（越小线越密）", gt=0, le=1000)
-    layer: Optional[str] = Field(default=LAYER_FILL, description="图层名，默认 FILL")
+    boundary_handles: Optional[List[str]] = Field(
+        default=None, min_length=1, max_length=64,
+        description="组合区域的已有图元句柄，支持二维直线、圆弧、圆和含圆弧多段线；与 boundary_handle 二选一",
+    )
+    seed_point: Optional[Tuple[float, float]] = Field(
+        default=None, description="组合模式必填的 WCS XY 区域内定位点（毫米）；只选择封闭区域，不作为边界顶点",
+    )
+    pattern: str = Field(default="ANSI31", description="预定义填充图案名，如 ANSI31、ANSI32、AR-CONC；SOLID 为实心", min_length=1, max_length=255)
+    scale: float = Field(default=1.0, description="图案比例，越小越密；SOLID 必须为 1", gt=0, le=1000)
+    angle: float = Field(default=0.0, description="图案旋转角度（度）；SOLID 必须为 0", ge=-360, le=360)
+    layer: str = Field(default=LAYER_FILL, description="填充图层，默认 FILL", min_length=1, max_length=255)
+    associative: bool = Field(default=False, description="是否关联已有边界；边界始终保留")
+    dry_run: bool = Field(default=True, description="默认 true 只预览；确认范围和图案后使用 false 实际写入")
+
+    @model_validator(mode="after")
+    def validate_pattern_parameters(self) -> "DrawHatchInput":
+        self.pattern, self.scale, self.angle = validate_hatch_parameters(self.pattern, self.scale, self.angle)
+        if (self.boundary_handle is None) == (self.boundary_handles is None):
+            raise ValueError("boundary_handle 与 boundary_handles 必须且只能提供一个")
+        if self.boundary_handles is not None:
+            validate_handles(self.boundary_handles, self.seed_point, self.associative)
+        elif self.seed_point is not None:
+            raise ValueError("seed_point 仅用于 boundary_handles 组合边界模式")
+        return self
 
 
 @mcp.tool(
     name="cad_draw_hatch",
     annotations={
-        "title": "画剖面填充",
+        "title": "按已有闭合边界创建图案填充",
         "readOnlyHint": False,
         "destructiveHint": False,
         "idempotentHint": False,
@@ -713,19 +738,27 @@ class DrawHatchInput(ToolInput):
     },
 )
 def cad_draw_hatch(params: DrawHatchInput) -> str:
-    """画剖面填充（ANSI31 斜线图案，工程图剖面线标配）。
+    """按已有图元构成的闭合区域创建原生 HATCH，设置图案、比例和角度。
 
-    注意：acad 模式（直接操控 AutoCAD）暂不支持填充，会返回错误；请用 dxf 模式。
-
-    Args:
-        params (DrawHatchInput): 闭合边界顶点、线距比例、图层。
-
-    Returns:
-        str: JSON，含图元句柄。
+    boundary_handle 接受单个闭合图元；boundary_handles + seed_point 选择
+    多条直线、圆弧、圆及二维多段线共同围成的区域，独立内圈自动留空。
+    组合模式保留真实圆弧，不补断口，拒绝自交、重叠、悬挂和不共面的边界。
+    组合模式当前要求 associative=false，所有用户图元保留，辅助边界自动清理。
+    首先 dry_run=true 预览实际边界、面积和内孔，再改 false 创建并回读验证。
+    AutoCAD 预览无法确认图案在本机是否可用，此项在正式创建时验证。
     """
     try:
-        pts = [tuple(p) for p in params.points]
-        r = _get_backend().draw_hatch(pts, params.scale, params.layer)
+        r = _get_backend().draw_hatch(
+            boundary_handle=params.boundary_handle,
+            boundary_handles=params.boundary_handles,
+            seed_point=params.seed_point,
+            pattern=params.pattern,
+            scale=params.scale,
+            angle=params.angle,
+            layer=params.layer,
+            associative=params.associative,
+            dry_run=params.dry_run,
+        )
         return _ok({"ok": True, **r})
     except Exception as e:
         return _fail(e)

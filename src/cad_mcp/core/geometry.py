@@ -48,6 +48,24 @@ def validate_diameter_dimension(
     return opposite, diameter
 
 
+def validate_hatch_parameters(pattern: str, scale: float, angle: float) -> Tuple[str, float, float]:
+    """Validate hatch settings for both backends; angles are supplied in degrees."""
+    if not isinstance(pattern, str):
+        raise ValueError("填充图案名必须是字符串")
+    pattern = pattern.strip().upper()
+    if not pattern or len(pattern) > 255 or any(ord(char) < 32 or ord(char) == 127 for char in pattern):
+        raise ValueError("填充图案名不能为空、超过 255 字符或包含控制字符")
+    scale, angle = float(scale), float(angle)
+    if not math.isfinite(scale) or not 0 < scale <= 1000:
+        raise ValueError("填充图案比例必须是大于 0 且不超过 1000 的有限数值")
+    if not math.isfinite(angle) or not -360 <= angle <= 360:
+        raise ValueError("填充图案角度必须是 -360 到 360 度之间的有限数值")
+    angle %= 360.0
+    if pattern == "SOLID" and (scale != 1.0 or angle != 0.0):
+        raise ValueError("SOLID 实心填充不使用图案比例和角度，必须使用 scale=1、angle=0")
+    return pattern, scale, angle
+
+
 def validate_closed_polygon(points: Sequence[Point]) -> Tuple[List[Point], float]:
     """Validate a finite, non-self-intersecting polygon and return its area.
 

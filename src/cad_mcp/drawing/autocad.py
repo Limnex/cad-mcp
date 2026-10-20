@@ -39,6 +39,7 @@ from cad_mcp.core.geometry import (
     validate_bulk_creation,
     validate_closed_polygon,
     validate_diameter_dimension,
+    validate_hatch_parameters,
     validate_table_data,
 )
 from cad_mcp.core.registry import (
@@ -62,6 +63,9 @@ from cad_mcp.core.runtime import (
     record_error,
 )
 from cad_mcp.core.open_paths import resolve_open_drawing_path
+from cad_mcp.drawing.hatch_regions import fill_acad_region
+from cad_mcp.drawing.hatch_regions import acad_source, refresh_valid_hatch
+from cad_mcp.core.hatch_boundaries import validate_source
 
 # 保存格式常量（AutoCAD 文件格式枚举）：64 = ac2018_dwg
 SAVE_FORMAT_DWG = 64
@@ -2080,18 +2084,36 @@ class AcadBackend(AcadDwtMixin):
                 "layer": dim.Layer, "kind": "diameter", "diameter": diameter,
                 "dimstyle": dim.StyleName}
 
-    def draw_hatch(self, points: Sequence[Point], scale: float = 1.0,
-                   layer: str = "FILL") -> Dict[str, Any]:
-        """画剖面填充（ANSI31 斜线图案）。points 为闭合边界顶点。
-
-        ⚠️ 已知限制：AutoCAD COM 的 AppendOuterLoop 无法通过 pywin32 可靠传递
-        嵌套边界数组（多轮验证均报"对象数组无效"）。故 acad 模式暂不支持填充，
-        请切换到 dxf 模式（cad_switch_mode）绘制剖面填充。
-        """
-        self._check_doc()
-        raise NotImplementedError(
-            "acad 模式暂不支持剖面填充（AutoCAD COM 接口限制）。"
-            "请用 cad_switch_mode 切到 dxf 模式后，再用 cad_draw_hatch 画填充。"
+    def draw_hatch(
+        self,
+        *,
+        boundary_handle: Optional[str] = None,
+        boundary_handles: Optional[Sequence[str]] = None,
+        seed_point: Optional[Point] = None,
+        pattern: str = "ANSI31",
+        scale: float = 1.0,
+        angle: float = 0.0,
+        layer: str = "FILL",
+        associative: bool = False,
+        dry_run: bool = True,
+    ) -> Dict[str, Any]:
+        """Fill one closed entity, or an exact closed region bounded by selected entities."""
+        if (boundary_handle is None) == (boundary_handles is None):
+            raise ValueError("boundary_handle 与 boundary_handles 必须且只能提供一个")
+        if boundary_handles is not None:
+            return fill_acad_region(
+                self, boundary_handles=boundary_handles, seed_point=seed_point,
+                pattern=pattern, scale=scale, angle=angle, layer=layer,
+                associative=associative, dry_run=dry_run,
+            )
+        if seed_point is not None:
+            raise ValueError("seed_point 仅用于 boundary_handles 组合边界模式")
+        if not isinstance(boundary_handle, str) or not boundary_handle.isdecimal():
+            raise ValueError("填充范围必须通过已有闭合边界的十进制句柄指定")
+        return self._fill_closed_boundary(
+            boundary_handle=boundary_handle, points=None, layer=layer,
+            associative=associative, keep_boundary=True, dry_run=dry_run,
+            pattern=pattern, scale=scale, angle=angle,
         )
 
     def fill_closed_boundary_solid(
@@ -2106,7 +2128,31 @@ class AcadBackend(AcadDwtMixin):
     ) -> Dict[str, Any]:
         """Create a native SOLID hatch and verify it through ActiveX readback."""
 
+        return self._fill_closed_boundary(
+            boundary_handle=boundary_handle, points=points, layer=layer,
+            associative=associative, keep_boundary=keep_boundary, dry_run=dry_run,
+        )
+
+    def _fill_closed_boundary(
+        self,
+        *,
+        boundary_handle: Optional[str],
+        points: Optional[Sequence[Point]],
+        layer: str,
+        associative: bool,
+        keep_boundary: bool,
+        dry_run: bool,
+        pattern: str = "SOLID",
+        scale: float = 1.0,
+        angle: float = 0.0,
+    ) -> Dict[str, Any]:
+        """Create a native hatch and verify its stored settings and boundary."""
+
         self._check_doc()
+        pattern, scale, angle = validate_hatch_parameters(pattern, scale, angle)
+        solid = pattern == "SOLID"
+        if (boundary_handle is None) == (points is None):
+            raise ValueError("boundary_handle 与 points 必须且只能提供一个")
         boundary = None
         normalized: Optional[List[Point]] = None
         boundary_area: Optional[float] = None
@@ -2122,11 +2168,23 @@ class AcadBackend(AcadDwtMixin):
             if boundary_kind in {"AcDbPolyline", "AcDb2dPolyline", "AcDb3dPolyline"}:
                 if not bool(_safe_get(boundary, "Closed", False)):
                     raise ValueError("指定多段线边界未闭合")
-            elif boundary_kind not in {"AcDbCircle", "AcDbEllipse", "AcDbRegion"}:
+                if boundary_kind in {"AcDbPolyline", "AcDb2dPolyline"}:
+                    validate_source(acad_source(boundary, str(boundary_handle), polyline_ocs=True))
+            elif boundary_kind == "AcDbEllipse":
+                start = float(boundary.StartParameter)
+                end = float(boundary.EndParameter)
+                if not math.isclose(abs(end - start), math.tau, rel_tol=0.0, abs_tol=1e-9):
+                    raise ValueError("指定椭圆边界未闭合")
+            elif boundary_kind not in {"AcDbCircle", "AcDbRegion"}:
                 raise ValueError(
-                    "AutoCAD 实心填充仅支持显式点、闭合多段线、圆、椭圆或面域")
+                    "AutoCAD 填充仅支持显式点、闭合多段线、圆、椭圆或面域")
             area = _safe_get(boundary, "Area", None)
-            boundary_area = float(area) if area is not None else None
+            if area is None and boundary_kind == "AcDbEllipse":
+                boundary_area = math.pi * float(boundary.MajorRadius) * float(boundary.MinorRadius)
+            else:
+                boundary_area = float(area) if area is not None else None
+            if boundary_area is None or not math.isfinite(boundary_area) or boundary_area <= 0:
+                raise ValueError("无法验证闭合边界具有有效正面积")
         if boundary_handle is not None and not keep_boundary:
             raise ValueError("不会自动删除用户已有边界；使用 boundary_handle 时必须 keep_boundary=true")
         if associative and not keep_boundary:
@@ -2136,6 +2194,10 @@ class AcadBackend(AcadDwtMixin):
                 "mode": "acad",
                 "dry_run": True,
                 "would_write": False,
+                "pattern": pattern,
+                "scale": scale,
+                "angle": angle,
+                "pattern_availability": "unverified_until_creation" if not solid else "available",
                 "boundary_kind": boundary_kind,
                 "boundary_area": boundary_area,
                 "layer": layer,
@@ -2156,8 +2218,12 @@ class AcadBackend(AcadDwtMixin):
 
             # ActiveX requires AppendOuterLoop to be the first operation after
             # AddHatch; do not read or write any hatch property between calls.
-            hatch = self.msp.AddHatch(0, "SOLID", bool(associative), 0)
+            hatch = self.msp.AddHatch(0 if solid else 1, pattern, bool(associative), 0)
             hatch.AppendOuterLoop(_dispatch_array([boundary]))
+            hatch = refresh_valid_hatch(hatch)
+            if not solid:
+                hatch.PatternScale = scale
+                hatch.PatternAngle = math.radians(angle)
             hatch.Evaluate()
             self.doc.Regen(1)
 
@@ -2177,16 +2243,25 @@ class AcadBackend(AcadDwtMixin):
                     "max": [float(value) for value in high],
                 },
             }
+            if not solid:
+                readback["pattern_scale"] = float(hatch.PatternScale)
+                readback["pattern_angle"] = math.degrees(float(hatch.PatternAngle)) % 360.0
             verified = (
                 readback["entity_type"] == "AcDbHatch"
-                and readback["pattern_name"].casefold() == "solid"
+                and readback["pattern_name"].upper() == pattern
                 and readback["associative"] is associative
                 and readback["layer"] == layer
                 and readback["loop_count"] == 1
                 and readback["bounding_box"] is not None
             )
+            if not solid:
+                verified = (
+                    verified
+                    and math.isclose(readback["pattern_scale"], scale, rel_tol=1e-9, abs_tol=1e-12)
+                    and math.isclose((readback["pattern_angle"] - angle + 180.0) % 360.0 - 180.0, 0.0, abs_tol=1e-7)
+                )
             if not verified:
-                raise RuntimeError(f"实心填充写入后读回不一致: {readback}")
+                raise RuntimeError(f"填充写入后读回不一致: {readback}")
             if created_boundary is not None and not keep_boundary:
                 created_boundary.Delete()
                 created_boundary = None
