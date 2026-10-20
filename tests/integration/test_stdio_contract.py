@@ -60,7 +60,7 @@ def test_stdio_initialize_and_tool_list(tmp_path):
     names = set(tools)
 
     assert initialize["result"]["serverInfo"]["name"] == "cad_mcp"
-    assert len(names) == 101
+    assert len(names) == 102
     assert {
         "cad_health",
         "cad_get_drawing_settings",

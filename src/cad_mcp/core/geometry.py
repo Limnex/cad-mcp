@@ -26,6 +26,28 @@ MAX_DRAWING_COMPARISONS = 1_000_000
 MAX_HATCH_BOUNDARY_POINTS = 1_000
 
 
+def validate_diameter_dimension(
+    cx: float, cy: float, edge_x: float, edge_y: float,
+    text_x: Optional[float] = None, text_y: Optional[float] = None,
+) -> Tuple[Point, float]:
+    """校验直径标注，在写入前返回对径点和未换算的几何直径。"""
+    if (text_x is None) != (text_y is None):
+        raise ValueError("文字位置 text_x 和 text_y 必须同时提供")
+    coordinates = [cx, cy, edge_x, edge_y]
+    if text_x is not None:
+        coordinates.extend([text_x, text_y])
+    if not all(math.isfinite(value) for value in coordinates):
+        raise ValueError("直径标注坐标必须是有限数值")
+    dx, dy = edge_x - cx, edge_y - cy
+    diameter = 2.0 * math.hypot(dx, dy)
+    if diameter == 0:
+        raise ValueError("圆心与圆上一点重合，无法直径标注")
+    opposite = (cx - dx, cy - dy)
+    if not all(math.isfinite(value) for value in (*opposite, diameter)):
+        raise ValueError("直径或对径点超出有限数值范围")
+    return opposite, diameter
+
+
 def validate_closed_polygon(points: Sequence[Point]) -> Tuple[List[Point], float]:
     """Validate a finite, non-self-intersecting polygon and return its area.
 

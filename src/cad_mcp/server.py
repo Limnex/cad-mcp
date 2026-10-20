@@ -37,6 +37,7 @@ from cad_mcp.core.geometry import (
     MAX_TABLE_COLUMNS,
     MAX_TABLE_ROWS,
     validate_bulk_creation,
+    validate_diameter_dimension,
     validate_table_data,
 )
 from cad_mcp.drawing.autocad import AcadBackend
@@ -163,7 +164,7 @@ class _AcadLockProxy:
         "draw_line", "draw_rectangle", "draw_circle", "draw_arc",
         "draw_polyline", "draw_mline", "draw_text", "draw_mtext", "trim",
         "draw_dimension", "draw_dimension_at", "draw_angular_dimension",
-        "draw_radius_dimension", "draw_hatch", "draw_centerline",
+        "draw_radius_dimension", "draw_diameter_dimension", "draw_hatch", "draw_centerline",
         "fill_closed_boundary_solid",
         "make_block", "insert_block", "draw_title_block", "draw_table",
         "delete_entity", "move_entity", "copy_entity", "rotate_entity",
@@ -965,6 +966,48 @@ def cad_draw_radius_dimension(params: DrawRadiusDimensionInput) -> str:
     try:
         r = _get_backend().draw_radius_dimension(
             params.cx, params.cy, params.edge_x, params.edge_y, params.layer)
+        return _ok({"ok": True, **r})
+    except Exception as e:
+        return _fail(e)
+
+
+class DrawDiameterDimensionInput(ToolInput):
+    cx: float = Field(..., description="圆心 X")
+    cy: float = Field(..., description="圆心 Y")
+    edge_x: float = Field(..., description="圆上一点 X，确定直径标注方向")
+    edge_y: float = Field(..., description="圆上一点 Y，确定直径标注方向")
+    layer: str = Field(default=LAYER_DIM, description="图层名，默认 DIM", min_length=1)
+    text_x: Optional[float] = Field(default=None, description="可选文字位置 X，须与 text_y 同时提供")
+    text_y: Optional[float] = Field(default=None, description="可选文字位置 Y，须与 text_x 同时提供")
+
+    @model_validator(mode="after")
+    def validate_geometry(self):
+        validate_diameter_dimension(
+            self.cx, self.cy, self.edge_x, self.edge_y, self.text_x, self.text_y)
+        return self
+
+
+@mcp.tool(
+    name="cad_draw_diameter_dimension",
+    annotations={
+        "title": "圆形直径标注",
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False,
+        "openWorldHint": False,
+    },
+)
+def cad_draw_diameter_dimension(params: DrawDiameterDimensionInput) -> str:
+    """创建原生圆形直径尺寸，自动显示直径符号并继承当前标注样式。
+
+    使用圆心和圆上一点确定几何直径，可同时给出 text_x/text_y 指定文字位置。
+    支持 DXF 和 AutoCAD；返回的 diameter 为模型几何值，显示单位由标注样式控制。
+    本工具按坐标创建标注，不与已有圆实体建立自动更新关联。
+    """
+    try:
+        r = _get_backend().draw_diameter_dimension(
+            params.cx, params.cy, params.edge_x, params.edge_y, params.layer,
+            text_x=params.text_x, text_y=params.text_y)
         return _ok({"ok": True, **r})
     except Exception as e:
         return _fail(e)

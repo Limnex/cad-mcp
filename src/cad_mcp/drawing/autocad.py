@@ -38,6 +38,7 @@ from cad_mcp.core.geometry import (
     trim_polyline_detailed,
     validate_bulk_creation,
     validate_closed_polygon,
+    validate_diameter_dimension,
     validate_table_data,
 )
 from cad_mcp.core.registry import (
@@ -2058,6 +2059,25 @@ class AcadBackend(AcadDwtMixin):
         dim = self.msp.AddDimRadial(_pt(cx, cy), _pt(edge_x, edge_y), radius * 0.1)
         return {"type": "DIMENSION", "handle": self._handle_str(dim.Handle),
                 "layer": dim.Layer, "kind": "radius", "radius": round(radius, 1),
+                "dimstyle": dim.StyleName}
+
+    def draw_diameter_dimension(self, cx: float, cy: float,
+                                edge_x: float, edge_y: float,
+                                layer: str = "DIM",
+                                text_x: Optional[float] = None,
+                                text_y: Optional[float] = None) -> Dict[str, Any]:
+        """通过两个对径点创建原生直径尺寸，使用当前标注样式。"""
+        opposite, diameter = validate_diameter_dimension(
+            cx, cy, edge_x, edge_y, text_x, text_y)
+        self._check_doc()
+        self._apply_layer(layer)
+        dim = self.msp.AddDimDiametric(
+            _pt(edge_x, edge_y), _pt(*opposite), diameter * 0.05)
+        if text_x is not None:
+            dim.TextPosition = _pt(text_x, text_y)
+            dim.Update()
+        return {"type": "DIMENSION", "handle": self._handle_str(dim.Handle),
+                "layer": dim.Layer, "kind": "diameter", "diameter": diameter,
                 "dimstyle": dim.StyleName}
 
     def draw_hatch(self, points: Sequence[Point], scale: float = 1.0,

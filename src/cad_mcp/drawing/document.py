@@ -29,6 +29,7 @@ from cad_mcp.core.geometry import (
     trim_polyline_detailed,
     validate_bulk_creation,
     validate_closed_polygon,
+    validate_diameter_dimension,
     validate_table_data,
 )
 from cad_mcp.core.registry import (
@@ -1075,6 +1076,29 @@ class CadDocument(DxfDwtMixin):
         dim = override.dimension
         return {"type": "DIMENSION", "handle": self._handle_str(dim.dxf.handle),
                 "layer": dim.dxf.layer, "kind": "radius", "radius": round(radius, 1)}
+
+    def draw_diameter_dimension(self, cx: float, cy: float,
+                                edge_x: float, edge_y: float,
+                                layer: str = LAYER_DIM,
+                                text_x: Optional[float] = None,
+                                text_y: Optional[float] = None) -> Dict[str, Any]:
+        """由圆心与圆上一点创建原生直径尺寸，可指定文字位置。"""
+        _, diameter = validate_diameter_dimension(cx, cy, edge_x, edge_y, text_x, text_y)
+        self._check_doc()
+        override = self.msp.add_diameter_dim(
+            (cx, cy), (edge_x, edge_y), dimstyle=self.active_dimstyle,
+            dxfattribs={"layer": layer})
+        if text_x is not None:
+            override.user_location_override((text_x, text_y))
+        try:
+            override.render()
+        except Exception:
+            self.msp.delete_entity(override.dimension)
+            raise
+        dim = override.dimension
+        return {"type": "DIMENSION", "handle": self._handle_str(dim.dxf.handle),
+                "layer": dim.dxf.layer, "kind": "diameter", "diameter": diameter,
+                "dimstyle": dim.dxf.dimstyle}
 
     def draw_hatch(self, points: Sequence[Point], scale: float = 1.0,
                    layer: str = LAYER_FILL) -> Dict[str, Any]:

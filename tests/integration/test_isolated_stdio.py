@@ -23,7 +23,7 @@ def test_production_stdio_executes_tools_in_persistent_worker(tmp_path, toolset)
             async with ClientSession(reader, writer) as session:
                 await session.initialize()
                 tools = await session.list_tools()
-                assert len(tools.tools) == (101 if toolset == "all" else 3)
+                assert len(tools.tools) == (102 if toolset == "all" else 3)
 
                 async def call(name, params):
                     if toolset == "webcodex":
@@ -39,6 +39,14 @@ def test_production_stdio_executes_tools_in_persistent_worker(tmp_path, toolset)
                 queried = await call("cad_query_entities", {"limit": 10})
                 assert queried["ok"] is True
                 assert len(queried["entities"]) == 1
+                dimension = await call("cad_draw_diameter_dimension", {
+                    "cx": 0, "cy": 0, "edge_x": 30, "edge_y": 40,
+                    "text_x": 100, "text_y": 100})
+                assert dimension["ok"] is True
+                assert dimension["kind"] == "diameter"
+                assert dimension["diameter"] == 100
+                queried = await call("cad_query_entities", {"limit": 10})
+                assert len(queried["entities"]) == 2
                 health = await call("cad_health", {})
                 assert health["document_open"] is True
                 assert health["worker"]["generation"] == 1
