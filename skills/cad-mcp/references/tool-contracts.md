@@ -1,6 +1,6 @@
 # CAD MCP 工具契约
 
-本文记录调用约束。当前运行时版本为 `1.5.3`，注册 104 个 `cad_*` 工具。具体参数名和返回字段以运行时 MCP 工具定义为准；若运行时定义与本文不一致，应以运行时定义为准并报告差异。
+本文记录调用约束。当前运行时版本为 `1.5.3`，注册 105 个 `cad_*` 工具。具体参数名和返回字段以运行时 MCP 工具定义为准；若运行时定义与本文不一致，应以运行时定义为准并报告差异。
 
 ## 调用前
 
@@ -154,6 +154,15 @@ DXF 可读写图纸设置、图层、尺寸样式和基础属性块，但不提�
 - 成功响应继续使用原有 JSON 字段，并包含 `ok: true`。
 - 工具函数捕获的运行错误返回 `ok: false`、`error` 和 `error_detail`。`error_detail` 包含 `code`、`operation`、`retryable`、`hint`、`request_id`。
 - MCP SDK 在调用工具前发现的参数结构错误可能表现为协议级校验错误，而不是工具函数的 `error_detail`；两种情况都视为未执行写入。
+
+## 原生二维倒角
+
+- `cad_chamfer(targets, distance1, method="distance", distance2?, angle?, trim=true, dry_run=true)`：在 `acad` 会话调用原生 CHAMFER；默认只读预览，不保存。距离为毫米，角度为度；`distance2` 省略时等于第一侧距离。`method="angle"` 须传 `angle`，不传 `distance2`；距离方式双零或角度方式长度/角度双零表示尖角。
+- `targets` 为 1–20 项的顺序列表：`{"mode":"pair","first":{"handle":"十进制句柄","point":[x,y,z]},"second":{...}}`；或 `{"mode":"polyline","handle":"十进制句柄"}`。同一批次可重用前一步修改后的实体；选择点必须落在对应步骤的剩余线段上。
+- `pair` 接受两条 LINE/RAY/XLINE，或同一二维多段线的相邻直线段；选择点为 WCS 毫米坐标，在线上、避开交点/多段线顶点、位于要保留的一侧。不同多段线或不相邻段不接受。`polyline` 处理所有直线相邻顶点，跳过圆弧相邻顶点；不允许部分顶点因边长不足而悄悄跳过。
+- 当前支持 WCS XY 平行平面、+Z 法向的 LWPOLYLINE/未拟合二维 POLYLINE，保留标高。UCS 可平移/绕 Z 旋转；多段线选段需要俯视图，执行时临时调整并恢复视图，选择范围存在其他实体则停止。拒绝锁定/冻结图层、纸空间和块内实体；多段线至多 1000 顶点，扫描实体数受运行时上限约束。
+- 预览返回 `plans` 中的 `before`、`after`、`corners`、独立 `lines`；`would_write` 表示是否有差异，预览的 `applied=false, verified=false`。执行返回实际 `after` 和新增 `entities`；原生修剪可将构造线转换为射线。成功修改须 `applied=true, verified=true`；无差异为 `applied=false, verified=true`。任一组命令、回读或恢复失败，整批撤销，错误详情中的 `rollback_status` 仅在读回确认恢复后为 `succeeded`。
+- 实例及完整限制见 [`docs/usage.md`](../../../docs/usage.md#cad-原生倒角)。DXF 后端本次不调整。
 
 ## 尺寸终止符
 

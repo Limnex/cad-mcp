@@ -20,7 +20,7 @@ from cad_mcp.core.runtime import CadMcpError, failure_json, health_metadata, suc
 class ToolProcessSupervisor:
     """One persistent serial worker, with deadlines enforced outside that worker."""
 
-    def __init__(self, *, mode="acad", tool_count=104, command=None,
+    def __init__(self, *, mode="acad", tool_count=105, command=None,
                  read_timeout=30.0, write_timeout=120.0, startup_timeout=15.0):
         self._command = command or [sys.executable, "-u", "-B", "-m", "cad_mcp.worker"]
         self._read_timeout = read_timeout

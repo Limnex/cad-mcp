@@ -58,6 +58,44 @@ cad-mcp config show
 
 打开不会自动保存。若在目录外图纸上显式调用 `cad_save_drawing`，DWG 和 DXF 模式下的 DXF 会写回原文件；acad 模式打开 DXF 后则在同目录生成 DWG，目标已存在时停止。保存前先核对目标路径并执行 `cad_check_drawing`。
 
+## CAD 原生倒角
+
+在 `acad` 会话中使用 `cad_chamfer` 调用原生 `CHAMFER`。默认 `dry_run=true`，返回每组的原几何、预期几何和倒角线；确认预览后，以相同参数加 `dry_run=false` 执行。正式执行读回实体类型、端点、顶点、圆弧参数和图层；任一组失败，整批撤销并核对恢复结果，不自动保存。
+
+| 参数 | 用法 |
+|---|---|
+| `method="distance"` | `distance1` 为第一侧距离，`distance2` 为第二侧距离；省略第二侧时与第一侧相同。双零表示修剪/延伸成尖角 |
+| `method="angle"` | `distance1` 为第一侧长度，`angle` 为相对第一侧的倒角角度（度）；不传 `distance2`。角度须小于所选夹角的补角；长度和角度同时为零可形成尖角 |
+| `trim` | 默认 `true`，修剪/延伸原线；`false` 保留原线并增加独立倒角线 |
+| `targets` | 按顺序处理 1–20 组，可混用 `pair` 与 `polyline`，也可再次处理前一组已经修剪的实体；后续选择点须落在该步的剩余线段上 |
+
+`pair` 接受两条 LINE/RAY/XLINE，或同一二维多段线的相邻直线段。每次选择包含十进制 `handle` 和 WCS 毫米坐标 `point=[x,y,z]`；选择点须在线上、避开交点和多段线顶点，并位于要保留的一侧。原生修剪可将 XLINE 变为 RAY，返回值按实际类型验证。
+
+例如，两条直线按第一侧 6 mm、相对第一侧 30° 倒角的预览请求：
+
+```json
+{
+  "params": {
+    "targets": [{
+      "mode": "pair",
+      "first": {"handle": "127", "point": [15, 0, 0]},
+      "second": {"handle": "128", "point": [0, 15, 0]}
+    }],
+    "method": "angle",
+    "distance1": 6,
+    "angle": 30,
+    "trim": true,
+    "dry_run": true
+  }
+}
+```
+
+句柄与坐标仅为示例，应使用当前图纸的真实查询结果。多段线整体倒角使用 `targets=[{"mode":"polyline","handle":"127"}]`，其余尺寸参数相同；支持 LWPOLYLINE 和未拟合的旧式二维 POLYLINE。原生命令跳过圆弧相邻顶点；边长不足导致只能完成部分倒角时，预检直接停止。
+
+当前处理平行于 WCS XY 的平面，保留原标高；多段线法向和 UCS Z 方向须为 WCS +Z，允许平移或绕 Z 旋转 UCS。拒绝跨标高、平行线、锁定/冻结图层、纸空间、块内实体、选段不相邻或来源不同的多段线，以及超过 1000 顶点的多段线。结果比较的位置容差为 0.000001 mm，模型空间扫描受运行时实体数上限约束。
+
+多段线选段倒角需要俯视图；执行期间临时缩放到该多段线，检查选择范围仅包含指定实体，随后恢复原视图。选择范围有其他实体时停止并回滚，请改选更清晰的线段位置。预览不改变视图、系统变量或实体；执行后恢复原倒角设置与对象捕捉设置。`applied=true, verified=true` 才表示本次修改已通过回读；无须修改时返回 `applied=false, verified=true`。
+
 ## 创建注释性块
 
 `cad_make_block` 可选传入 `annotative=true`，在 `acad` 模式把指定模型空间实体建为 AutoCAD 原生注释性块。成功响应除原有 `message` 外，还返回 `annotative=true`、`verified=true` 和 `readback`；回读包括块内实体数、原生注释性标记与源实体移除状态。命令使用指定基点并避免对象捕捉改变基点；失败时触发当前操作的撤销组回滚。

@@ -1,8 +1,10 @@
-import json
+import asyncio
 import os
 from pathlib import Path
-import subprocess
 import sys
+
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
 
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
@@ -10,25 +12,11 @@ SOURCE_DIR = PLUGIN_ROOT / "src"
 
 
 def test_stdio_initialize_and_tool_list(tmp_path):
-    requests = [
-        {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": {
-                "protocolVersion": "2024-11-05",
-                "capabilities": {},
-                "clientInfo": {"name": "pytest", "version": "1.0"},
-            },
-        },
-        {"jsonrpc": "2.0", "method": "notifications/initialized"},
-        {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
-    ]
-    payload = "".join(json.dumps(item) + "\n" for item in requests)
     env = os.environ.copy()
     env.update(
         {
             "CAD_MODE": "dxf",
+            "CAD_MCP_TOOLSET": "all",
             "CAD_DRAWINGS_DIR": str(tmp_path / "drawings"),
             "CAD_LOG_DIR": str(tmp_path / "logs"),
             "PYTHONUTF8": "1",
@@ -40,27 +28,21 @@ def test_stdio_initialize_and_tool_list(tmp_path):
         }
     )
 
-    completed = subprocess.run(
-        [sys.executable, "-m", "cad_mcp"],
-        cwd=PLUGIN_ROOT,
-        env=env,
-        input=payload,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        timeout=30,
-        check=False,
-    )
-
-    assert completed.returncode == 0, completed.stderr
-    responses = [json.loads(line) for line in completed.stdout.splitlines() if line]
-    initialize = next(item for item in responses if item.get("id") == 1)
-    tool_list = next(item for item in responses if item.get("id") == 2)
-    tools = {tool["name"]: tool for tool in tool_list["result"]["tools"]}
+    parameters = StdioServerParameters(command=sys.executable, args=["-B", "-m", "cad_mcp"], env=env)
+    async def exchange():
+        # Keep stdin open until the list response arrives. Sending a batch
+        # followed by EOF races the server's in-flight request handlers.
+        async with stdio_client(parameters) as (reader, writer):
+            async with ClientSession(reader, writer) as session:
+                initialized = await session.initialize()
+                listed = await session.list_tools()
+                return initialized, listed
+    initialize, tool_list = asyncio.run(asyncio.wait_for(exchange(), timeout=30))
+    tools = {tool.name: tool.model_dump(by_alias=True) for tool in tool_list.tools}
     names = set(tools)
 
-    assert initialize["result"]["serverInfo"]["name"] == "cad_mcp"
-    assert len(names) == 104
+    assert initialize.serverInfo.name == "cad_mcp"
+    assert len(names) == 105
     assert {
         "cad_health",
         "cad_get_drawing_settings",
@@ -78,7 +60,13 @@ def test_stdio_initialize_and_tool_list(tmp_path):
         "cad_audit_block_definition",
         "cad_fill_closed_boundary_solid",
         "cad_switch_mode",
+        "cad_chamfer",
     }.issubset(names)
+
+    chamfer_schema = tools["cad_chamfer"]["inputSchema"]
+    chamfer_properties = chamfer_schema["$defs"]["ChamferInput"]["properties"]
+    assert chamfer_properties["method"]["enum"] == ["distance", "angle"]
+    assert chamfer_properties["dry_run"]["default"] is True
 
     open_schema = tools["cad_open_drawing"]["inputSchema"]
     open_properties = open_schema["$defs"]["OpenDrawingInput"]["properties"]

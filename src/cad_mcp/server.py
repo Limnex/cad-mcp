@@ -34,6 +34,7 @@ from cad_mcp.drawing.document import (
     LAYER_FILL,
 )
 from cad_mcp.drawing.entity_properties import EntityPropertyPatch
+from cad_mcp.drawing.chamfer import ChamferRequest
 from cad_mcp.core.geometry import (
     MAX_TABLE_COLUMNS,
     MAX_TABLE_ROWS,
@@ -160,7 +161,7 @@ class _AcadLockProxy:
     dxf 模式不经此代理（不碰 AutoCAD，无需锁）。
     """
 
-    # edit_entity_properties owns its undo group after preflight: an empty group
+    # edit_entity_properties and chamfer own their undo groups after preflight: an empty group
     # followed by U could otherwise undo the preceding successful operation.
     _MUTATING_METHODS = {
         "create_layer", "set_layer_props", "set_active_layer",
@@ -2189,6 +2190,30 @@ def cad_draw_centerline(params: DrawCenterlineInput) -> str:
     try:
         r = _get_backend().draw_centerline(params.x1, params.y1, params.x2, params.y2, params.layer)
         return _ok({"ok": True, **r})
+    except Exception as e:
+        return _fail(e)
+
+
+class ChamferInput(ToolInput, ChamferRequest):
+    """Native CHAMFER request; nested models also forbid unknown fields."""
+
+
+@mcp.tool(
+    name="cad_chamfer",
+    annotations={"title": "CAD 原生倒角", "readOnlyHint": False,
+                 "destructiveHint": True, "idempotentHint": False, "openWorldHint": False},
+)
+def cad_chamfer(params: ChamferInput) -> str:
+    """AutoCAD 原生 CHAMFER：两侧距离或第一侧距离＋角度，可修剪/延伸或保留原线。
+
+    targets 依次指定 pair（两条 LINE/RAY/XLINE，或同一二维多段线相邻直线段）和
+    polyline（二维多段线全部可倒角顶点，跳过圆弧相邻顶点）。pair 的选择点使用
+    WCS [x,y,z]，须在线上并位于要保留的一侧。distance 方式两侧均为零表示尖角。
+    先用 dry_run=true 预览，再以 false 执行；批次失败整体撤销，成功后回读验证，
+    不保存图纸。当前支持 WCS XY 平行平面，二维多段线法向为 +Z；最多 20 组。
+    """
+    try:
+        return _ok({"ok": True, **_get_backend().chamfer(params.model_dump())})
     except Exception as e:
         return _fail(e)
 
