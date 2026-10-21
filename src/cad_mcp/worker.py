@@ -8,6 +8,7 @@ import json
 import sys
 
 from cad_mcp.core.runtime import failure_json
+from cad_mcp.core.tool_results import encode_tool_result
 
 
 def _snapshot(server):
@@ -40,7 +41,7 @@ def serve(server) -> None:
             if tool is None:
                 raise ValueError(f"未知 CAD 工具: {name}")
             with redirect_stdout(sys.stderr):
-                result = asyncio.run(tool.run(request["arguments"]))
+                result = encode_tool_result(asyncio.run(tool.run(request["arguments"])))
         except Exception as exc:
             # FastMCP wraps validation errors; keep the original classification.
             from mcp.server.fastmcp.exceptions import ToolError

@@ -5,6 +5,13 @@ description: 使用 CAD MCP 创建、检查和修改 DXF/DWG，通过外部 Draf
 
 # CAD MCP 使用指南
 
+## 局部图像预览
+
+需要查看局部时用 `cad_preview_region` 指定模型空间 WCS XY 矩形范围，默认同时返回 PNG 图片
+和 `image_path` 绝对路径。图片先存到日志目录同级 `images/日期/`；显示失败可按路径读取，
+客户端拒绝图片响应时可设 `include_image=false` 仅取路径。不要把预览当作 AutoCAD 原生截图；
+核对返回的 `warnings`，参数和双模式边界见[工具契约](references/tool-contracts.md#局部图像预览)。
+
 ## 使用边界
 
 CAD MCP 负责把已确定的工程数据转成 CAD 实体，并负责检查、更新和出图。工程参数、构筑物尺寸、工艺路线和规范结论必须依据用户资料确定，不能由 CAD 工具自行臆造。
@@ -71,7 +78,7 @@ CAD MCP 负责把已确定的工程数据转成 CAD 实体，并负责检查、�
 
 ## 运行时安全契约
 
-当前运行时版本为 `1.5.3`，注册 104 个 `cad_*` 工具。每次会话先调用 `cad_health(reconnect=false)`，核对模式、连接、文档状态、服务端与 Python 版本、后端能力和最近错误编号；用户明确 CAD 已打开且要求操作图纸时，可使用 `reconnect=true` 连接已有实例，无须额外确认。CAD 运行状态未知时先向用户确认。
+当前运行时版本为 `1.5.3`，注册 105 个 `cad_*` 工具。每次会话先调用 `cad_health(reconnect=false)`，核对模式、连接、文档状态、服务端与 Python 版本、后端能力和最近错误编号；用户明确 CAD 已打开且要求操作图纸时，可使用 `reconnect=true` 连接已有实例，无须额外确认。CAD 运行状态未知时先向用户确认。
 
 - 所有公开工具输入拒绝未知字段，数值字段拒绝 `NaN`、正无穷和负无穷；参数校验失败视为未执行写入，不得猜测参数后继续。
 - 工具函数捕获的运行错误返回 `ok: false`、`error` 和 `error_detail`；读取其中的 `code`、`operation`、`retryable`、`hint` 和 `request_id`。

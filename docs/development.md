@@ -83,3 +83,28 @@ try {
 - README 面向 GitHub 仓库访问者，所有用户文档以仓库根目录为入口。
 - 兼容性现象要标注测试环境和证据边界，不把单机实测写成普遍结论。
 - MCP 工具参数和返回字段以运行时定义及内置 Skill 的 `references/tool-contracts.md` 为准。
+
+## 局部图像预览验证
+
+```powershell
+uv run pytest tests/unit/test_region_preview.py tests/integration/test_preview_stdio.py
+```
+
+检查真实 PNG 像素的范围裁切、比例保持、黑白背景、空白范围、奇数尺寸、文件唯一命名、
+未保存修改、原 DXF 不变、内联失败路径兜底，以及普通/精简工具集通过工作进程返回
+标准 MCP 图片内容。AutoCAD 单元测试模拟 Export 成功与失败，检查自有选择集和快照清理。
+这些测试不证明真实 AutoCAD 导出或特定客户端的模型看图行为。
+
+需要单独验证真实 AutoCAD 时，先手动启动并确认可运行实机测试，再设置现有开关：
+
+```powershell
+$env:CAD_MCP_RUN_ACAD_INTEGRATION = '1'
+try {
+    uv run pytest tests/integration/test_preview_acad.py -m acad
+} finally {
+    Remove-Item Env:CAD_MCP_RUN_ACAD_INTEGRATION
+}
+```
+
+用例仅在自有临时图纸中绘制并预览，比较图纸路径、实体数、保存状态、视图、活动布局与
+选择集数量，结束后不保存临时图纸并恢复原活动图纸。不会冷启动 AutoCAD。

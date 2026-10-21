@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add `cad_preview_region` for DXF and AutoCAD modelspace XY regions, preserving live unsaved content. Persist unique PNGs under `images/YYYY-MM-DD/` beside the configured log directory before returning native MCP image content and an absolute fallback path through full/gateway tools and isolated workers. Document ezdxf rendering limits and add pixel, persistence, transport, snapshot-cleanup, and opt-in AutoCAD checks.
+
 - Extend entity property editing to planar ARC, LWPOLYLINE, INSERT, HATCH, ELLIPSE and POINT. Preserve elevations/Z scale, per-segment polyline data, hatch loops/holes/associativity, and attached attribute geometry. Add formatted attribute values and copy-on-write fixed/nested block text edits scoped to the selected instance; preflight unsupported dependencies and verify rollback removes cloned definitions.
 
 - Add `cad_get_entity_properties` and `cad_edit_entity_properties` for model-space entities in DXF and AutoCAD. Preview common appearance, TEXT/MTEXT content/height/rotation, LINE endpoints and CIRCLE center/radius; preflight resources and locked layers, verify readback and roll back failures without saving.

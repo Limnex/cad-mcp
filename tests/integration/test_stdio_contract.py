@@ -1,8 +1,10 @@
-import json
+import asyncio
 import os
 from pathlib import Path
-import subprocess
 import sys
+
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
 
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
@@ -10,21 +12,6 @@ SOURCE_DIR = PLUGIN_ROOT / "src"
 
 
 def test_stdio_initialize_and_tool_list(tmp_path):
-    requests = [
-        {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": {
-                "protocolVersion": "2024-11-05",
-                "capabilities": {},
-                "clientInfo": {"name": "pytest", "version": "1.0"},
-            },
-        },
-        {"jsonrpc": "2.0", "method": "notifications/initialized"},
-        {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
-    ]
-    payload = "".join(json.dumps(item) + "\n" for item in requests)
     env = os.environ.copy()
     env.update(
         {
@@ -40,29 +27,25 @@ def test_stdio_initialize_and_tool_list(tmp_path):
         }
     )
 
-    completed = subprocess.run(
-        [sys.executable, "-m", "cad_mcp"],
-        cwd=PLUGIN_ROOT,
-        env=env,
-        input=payload,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        timeout=30,
-        check=False,
-    )
+    parameters = StdioServerParameters(command=sys.executable, args=["-B", "-m", "cad_mcp"], env=env)
 
-    assert completed.returncode == 0, completed.stderr
-    responses = [json.loads(line) for line in completed.stdout.splitlines() if line]
-    initialize = next(item for item in responses if item.get("id") == 1)
-    tool_list = next(item for item in responses if item.get("id") == 2)
-    tools = {tool["name"]: tool for tool in tool_list["result"]["tools"]}
+    async def exchange():
+        # Keep stdin open until responses arrive; EOF may cancel pending requests.
+        async with stdio_client(parameters) as (reader, writer):
+            async with ClientSession(reader, writer) as session:
+                initialized = await session.initialize()
+                listed = await session.list_tools()
+                return initialized.model_dump(mode="json"), listed.model_dump(mode="json")
+
+    initialize, tool_list = asyncio.run(asyncio.wait_for(exchange(), timeout=30))
+    tools = {tool["name"]: tool for tool in tool_list["tools"]}
     names = set(tools)
 
-    assert initialize["result"]["serverInfo"]["name"] == "cad_mcp"
-    assert len(names) == 104
+    assert initialize["serverInfo"]["name"] == "cad_mcp"
+    assert len(names) == 105
     assert {
         "cad_health",
+        "cad_preview_region",
         "cad_get_drawing_settings",
         "cad_set_drawing_settings",
         "cad_list_layers_detailed",
@@ -108,3 +91,8 @@ def test_stdio_initialize_and_tool_list(tmp_path):
     ]["properties"]
     assert textstyle_properties["model_height"]["minimum"] == 0
     assert "exclusiveMinimum" not in textstyle_properties["model_height"]
+
+    preview_schema = tools["cad_preview_region"]["inputSchema"]["$defs"]["PreviewRegionInput"]
+    assert set(preview_schema["required"]) == {"x_min", "y_min", "x_max", "y_max"}
+    assert preview_schema["properties"]["include_image"]["default"] is True
+    assert preview_schema["properties"]["width"]["maximum"] == 2048
