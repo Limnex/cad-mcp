@@ -229,6 +229,28 @@ def _is_com_object(obj) -> bool:
         return False
 
 
+def _refresh_com_dispatch(obj):
+    """Rebuild runtime member maps with bounded COM metadata retries."""
+    from win32com.client import build, dynamic
+
+    raw = _ComRetryProxy._unwrap(obj)
+    if not _is_com_object(raw):
+        return obj
+
+    def rebuild():
+        info = raw._oleobj_.GetTypeInfo()
+        attr = info.GetTypeAttr()
+        if attr[5] == pythoncom.TKIND_INTERFACE and attr[11] & pythoncom.TYPEFLAG_FDUAL:
+            info = info.GetRefTypeInfo(info.GetRefTypeOfImplType(-1))
+            attr = info.GetTypeAttr()
+        return _ComRetryProxy(dynamic.CDispatch(
+            raw._oleobj_, build.DispatchItem(info, attr, None, 0),
+            info.GetDocumentation(-1)[0]))
+
+    # Includes GetFuncDesc calls made while building the eager member map.
+    return _ComRetryProxy(raw)._retry(rebuild)
+
+
 class _ComRetryProxy:
     """COM 对象代理：AutoCAD 忙（RPC 拒绝/稍后重试）时自动等待并重试。
 
@@ -270,7 +292,18 @@ class _ComRetryProxy:
     def __getattr__(self, name):
         obj = object.__getattribute__(self, "_obj")
         # 属性读取也可能被 AutoCAD 拒绝（忙），同样走重试
-        attr = self._retry(lambda: getattr(obj, name))
+        try:
+            attr = self._retry(lambda: getattr(obj, name))
+        except AttributeError:
+            from win32com.client.dynamic import CDispatch
+
+            if not isinstance(obj, CDispatch):
+                raise
+            # pywin32 can hide a rejected GetIDsOfNames/GetTypeInfo as a
+            # missing member. Refresh metadata once, without invoking a method.
+            refreshed = self._unwrap(_refresh_com_dispatch(obj))
+            attr = self._retry(lambda: getattr(refreshed, name))
+            object.__setattr__(self, "_obj", refreshed)
         # 顺序关键：pywin32 的动态 Dispatch 对象（COM 属性/子对象）同时可调用且
         # 有 _oleobj_；真正的 COM 方法（type=method）没有 _oleobj_。必须先判
         # _oleobj_（属性对象 → 包装），再判 callable（方法 → 重试包装）。

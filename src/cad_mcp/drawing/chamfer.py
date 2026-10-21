@@ -9,7 +9,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from cad_mcp.core.geometry import MAX_DRAWING_SCAN_ENTITIES
-from cad_mcp.drawing.autocad import _bounded_com_scan
+from cad_mcp.drawing.autocad import _bounded_com_scan, _refresh_com_dispatch
 
 
 TOL = 1e-6
@@ -73,23 +73,7 @@ def fresh_com(obj):
     pywin32's lazy maps can also classify Documents.Add as a generic object.
     No makepy generation or fixed, version-dependent DISPIDs are used here.
     """
-    import pythoncom
-    from win32com.client import build, dynamic
-    from cad_mcp.drawing.autocad import _ComRetryProxy
-
-    raw = _ComRetryProxy._unwrap(obj)
-    if not hasattr(raw, "_oleobj_"):
-        return obj
-    def rebuild():
-        info = raw._oleobj_.GetTypeInfo()
-        attr = info.GetTypeAttr()
-        if attr[5] == pythoncom.TKIND_INTERFACE and attr[11] & pythoncom.TYPEFLAG_FDUAL:
-            info = info.GetRefTypeInfo(info.GetRefTypeOfImplType(-1))
-            attr = info.GetTypeAttr()
-        return _ComRetryProxy(dynamic.CDispatch(
-            raw._oleobj_, build.DispatchItem(info, attr, None, 0), info.GetDocumentation(-1)[0]))
-    # Metadata calls are COM calls too, including each GetFuncDesc in Build.
-    return _ComRetryProxy(raw)._retry(rebuild)
+    return _refresh_com_dispatch(obj)
 
 
 def _vec(a, b):
