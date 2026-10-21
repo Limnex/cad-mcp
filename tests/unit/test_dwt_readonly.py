@@ -155,4 +155,4 @@ def test_mcp_readonly_wrappers_and_tool_registration(monkeypatch, tmp_path):
         "cad_list_layers_detailed",
         "cad_list_textstyles",
     }.issubset(names)
-    assert len(names) == 107
+    assert len(names) == 108

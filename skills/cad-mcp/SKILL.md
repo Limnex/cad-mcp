@@ -70,6 +70,8 @@ CAD MCP 负责把已确定的工程数据转成 CAD 实体，并负责检查、�
 
 ### 直接图元工作流
 
+AutoCAD 圆角使用 `cad_fillet`：先查十进制句柄，指定半径、拾取位置与 trim，默认预检，确认后 `dry_run=false`。支持两图元或整条轻量多段线；核对实际结果、`rounded_arc_count` 和失败回滚状态，不把预检通过当作几何可行。短边可能跳过，不自动保存。
+
 仅适用于局部补画、简单几何或精确单对象修改：新建或打开图纸，设置图层和样式，绘制或编辑实体，检查范围和视口适配，查询实体，执行 `cad_check_drawing`，最后保存。`cad_open_drawing` 可用受控图纸目录内的文件名，或现有本机图纸的盘符绝对路径；目录外图纸的保存位置须先与用户核对。
 
 编辑已有实体时，先用 `cad_get_entity_properties` 核对十进制句柄、当前值及 `editable_properties`；再调用 `cad_edit_entity_properties(dry_run=true)` 查看 `changes`，确认后用相同 `properties` 和 `dry_run=false` 应用。检查 `applied`、`verified` 和 `after`；无差异时 `applied=false`。只支持模型空间；图层、线型必须已存在且图层未锁定。不自动保存，失败时检查回滚状态。
@@ -86,7 +88,7 @@ CAD MCP 负责把已确定的工程数据转成 CAD 实体，并负责检查、�
 
 ## 运行时安全契约
 
-当前运行时版本为 `1.5.3`，注册 107 个 `cad_*` 工具。每次会话先调用 `cad_health(reconnect=false)`，核对模式、连接、文档状态、服务端与 Python 版本、后端能力和最近错误编号；用户明确 CAD 已打开且要求操作图纸时，可使用 `reconnect=true` 连接已有实例，无须额外确认。CAD 运行状态未知时先向用户确认。
+当前运行时版本为 `1.5.3`，注册 108 个 `cad_*` 工具。每次会话先调用 `cad_health(reconnect=false)`，核对模式、连接、文档状态、服务端与 Python 版本、后端能力和最近错误编号；用户明确 CAD 已打开且要求操作图纸时，可使用 `reconnect=true` 连接已有实例，无须额外确认。CAD 运行状态未知时先向用户确认。
 
 - 所有公开工具输入拒绝未知字段，数值字段拒绝 `NaN`、正无穷和负无穷；参数校验失败视为未执行写入，不得猜测参数后继续。
 - 工具函数捕获的运行错误返回 `ok: false`、`error` 和 `error_detail`；读取其中的 `code`、`operation`、`retryable`、`hint` 和 `request_id`。

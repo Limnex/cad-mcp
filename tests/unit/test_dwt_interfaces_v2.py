@@ -43,7 +43,7 @@ NEW_DWT_TOOLS = {
 def test_all_26_dwt_interfaces_are_registered_with_strict_object_schemas():
     tools = {tool.name: tool for tool in server.mcp._tool_manager.list_tools()}
 
-    assert len(tools) == 107
+    assert len(tools) == 108
     assert NEW_DWT_TOOLS.issubset(tools)
     for name in NEW_DWT_TOOLS:
         schema = tools[name].parameters

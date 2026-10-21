@@ -34,6 +34,7 @@ from cad_mcp.drawing.document import (
     LAYER_FILL,
 )
 from cad_mcp.drawing.entity_properties import EntityPropertyPatch
+from cad_mcp.drawing.fillet import FilletInput
 from cad_mcp.core.geometry import (
     MAX_TABLE_COLUMNS,
     MAX_TABLE_ROWS,
@@ -174,7 +175,7 @@ class _AcadLockProxy:
     dxf 模式不经此代理（不碰 AutoCAD，无需锁）。
     """
 
-    # edit_entity_properties owns its undo group after preflight: an empty group
+    # edit_entity_properties and fillet own their undo groups after preflight: an empty group
     # followed by U could otherwise undo the preceding successful operation.
     _MUTATING_METHODS = {
         "create_layer", "set_layer_props", "set_active_layer",
@@ -530,6 +531,33 @@ def cad_trim(params: TrimInput) -> str:
         r = _get_backend().trim(params.subject_handle, params.cutting_handles,
                                 params.pick_x, params.pick_y)
         return _ok({"ok": True, **r})
+    except Exception as e:
+        return _fail(e)
+
+
+@mcp.tool(
+    name="cad_fillet",
+    annotations={
+        "title": "原生圆角",
+        "readOnlyHint": False,
+        "destructiveHint": True,
+        "idempotentHint": False,
+        "openWorldHint": False,
+    },
+)
+def cad_fillet(params: FilletInput) -> str:
+    """在当前 AutoCAD 模型空间执行原生 FILLET，默认只预检。
+
+    pair 使用两个十进制句柄和对应的 WCS 三维拾取位置，支持直线、圆弧、圆和
+    轻量多段线；同一多段线可拾取不同线段。polyline 对整条轻量多段线圆角。
+    radius=0 用于直线/多段线尖角。trim 控制修剪，dry_run=false 才执行。
+    预览不预测几何结果；正式执行回读实际变化及半径，不自动保存。
+    """
+    try:
+        backend = _get_backend()
+        if _backend_mode(backend) != "acad":
+            raise ValueError("请先切换到 acad 模式并打开目标图纸")
+        return _ok({"ok": True, **backend.fillet(**params.model_dump())})
     except Exception as e:
         return _fail(e)
 

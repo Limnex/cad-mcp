@@ -1,6 +1,6 @@
 # CAD MCP 工具契约
 
-本文记录调用约束。当前运行时版本为 `1.5.3`，注册 104 个 `cad_*` 工具。具体参数名和返回字段以运行时 MCP 工具定义为准；若运行时定义与本文不一致，应以运行时定义为准并报告差异。
+本文记录调用约束。当前运行时版本为 `1.5.3`，注册 105 个 `cad_*` 工具。具体参数名和返回字段以运行时 MCP 工具定义为准；若运行时定义与本文不一致，应以运行时定义为准并报告差异。
 
 ## 调用前
 
@@ -44,6 +44,33 @@
 - `cad_create_or_update_ctb`：先确认目标目录正是 AutoCAD 实际打印样式目录，并检查覆盖策略。`dry_run=true` 返回计划；由于 ActiveX 不能可靠创建/编辑 CTB，正式调用返回 `UNSUPPORTED_OPERATION`，不创建空文件，也不伪造哈希。
 
 DXF 可读写图纸设置、图层、尺寸样式和基础属性块，但不提供真实 CTB/STB 转换、命名页面设置、DWG 块库或关联 AutoCAD 字段。相关正式调用必须返回 `UNSUPPORTED_MODE`；DWT 配置正式应用限定 `acad`。
+
+## 原生圆角
+
+`cad_fillet` 用于当前 AutoCAD 图纸的模型选项卡，调用原生 `FILLET`。所有句柄为正整数十进制字符串，坐标为 WCS 三维坐标，长度单位 mm。当前版本新增 AutoCAD 实现，DXF 实现留待后续版本。
+
+| 参数 | 默认值 | 约束 |
+|---|---|---|
+| `mode` | `pair` | `pair` 两次拾取；`polyline` 整条轻量多段线 |
+| `handles` | 必填 | pair 两项，polyline 一项；模型空间的 LINE、ARC、CIRCLE、LWPOLYLINE |
+| `pick_points` | 省略 | pair 必填，两个 `[x,y,z]` 与句柄对应；决定保留侧和多段线线段；polyline 不传 |
+| `radius` | 必填 | 有限数且 >=0；0 用于直线/多段线尖角，或整条多段线去圆角 |
+| `trim` | `true` | 是否修剪/延伸源图元；保持 AutoCAD 原生命令语义 |
+| `dry_run` | `true` | true 零写入预检；false 正式执行，不自动保存 |
+
+只处理厚度为零、平行于 XY 平面且同标高的图元，圆/圆弧/多段线法向须为 +Z；源图层不得锁定，拾取点须位于同标高。同一多段线可重复指定句柄并拾取不同线段。拾取位置应靠近目标线段。曲线组合由 AutoCAD 原生最近点计算得到曲线上的选取位置；同一多段线保留原拾取点，避免误选位置被自动投影到其他线段。
+
+预检返回 `before`、`applied=false`、`verified=false`，不承诺半径可行或预测切点。正式执行回读实际变化、标高及圆角半径，返回 `after`、`created`、`modified_handles`、`removed_handles`、`rounded_arc_count`、`applied=true` 和 `verified=true`。零半径操作的圆弧计数为 0。整体多段线遇到短边可能只完成部分拐角，返回值不代表全部角均已圆角。
+
+操作持有现有 AutoCAD 操作锁，预检后建立独立撤销组，恢复并回读 FILLETRAD、TRIMMODE、OSMODE、CMDECHO 和临时完成标记 USERS5。原生命令无完成标记、没有几何变化或无法回读指定半径时均失败；发生变化后尝试撤销并核验原图元，回滚状态在错误详情中返回。无几何变化时不发 U，避免撤销前一次成功操作。包含圆、圆弧或多段线的 pair 操作临时缩放到拾取区域，使用原生按点选取并核对命中句柄；误选其他图元时拒绝执行。完成或失败后恢复视图，按 VIEWCTR、VIEWSIZE、VIEWDIR、TARGET、VIEWTWIST 核验实际画面，不用可能缓存的 COM 视口属性冒充恢复成功。
+
+两条直线圆角示例（确认预检后将 `dry_run` 改为 `false`）：
+
+```json
+{"mode":"pair","handles":["10","11"],"pick_points":[[50,0,0],[0,50,0]],"radius":10,"trim":true,"dry_run":true}
+```
+
+整条多段线示例：`{"mode":"polyline","handles":["12"],"radius":10,"dry_run":true}`。
 
 ## 已有实体属性读取与编辑
 

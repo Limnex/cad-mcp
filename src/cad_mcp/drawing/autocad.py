@@ -1910,6 +1910,14 @@ class AcadBackend(AcadDwtMixin):
                 "layer": e.Layer, "text": text, "height": height,
                 "width": width, "rotation": rotation}
 
+    @_bounded_com_scan
+    def fillet(self, *, handles: List[str], radius: float, mode: str = "pair",
+               pick_points=None, trim: bool = True, dry_run: bool = True) -> Dict[str, Any]:
+        """原生 FILLET；预检后自建撤销组，写后核验，恢复用户设置。"""
+        from cad_mcp.drawing.fillet import fillet_acad
+        return fillet_acad(self, handles=handles, radius=radius, mode=mode,
+                           pick_points=pick_points, trim=trim, dry_run=dry_run)
+
     def trim(self, subject_handle: str, cutting_handles: List[str],
              pick_x: float, pick_y: float) -> Dict[str, Any]:
         """在离拾取点最近的切割交点处，把被修剪图元截断，保留拾取点一侧。

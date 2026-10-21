@@ -1,6 +1,6 @@
 # CAD MCP
 
-CAD MCP 是面向 Codex 等 MCP 客户端的本地 CAD 服务端，提供 107 个 `cad_*` 工具，
+CAD MCP 是面向 Codex 等 MCP 客户端的本地 CAD 服务端，提供 108 个 `cad_*` 工具，
 用于创建、检查和修改 DXF/DWG，配置 DraftingProfile 2.0、DWG 图框、布局视口以及 PDF
 出图。仓库同时包含 Python 服务端、Codex 插件清单和内置 Skill。
 
@@ -38,6 +38,13 @@ CAD MCP 只负责把已经确定的数据转换为 CAD 实体。工程尺寸、�
 新增几何编辑面向 XY 平面，保留原标高和 Z 比例。块内容可按属性标签修改编号、名称、数值，也可按读取结果中的路径修改内部固定文字；固定文字会复制所需块定义，仅影响选中实例，其他同名块保留原内容。数值按字符串传入（如 `"12.00"`），保留显示格式。
 
 编辑默认 `dry_run=true` 只预览差异；正式修改需显式设置 `false`。图层和线型须已存在，锁定图层拒绝修改；写后回读，失败尝试回滚，不自动保存。完整参数与示例见[工具契约](skills/cad-mcp/references/tool-contracts.md#已有实体属性读取与编辑)。
+
+## 原生圆角
+
+`cad_fillet` 在 AutoCAD 模型空间执行原生 `FILLET`，支持两个图元之间圆角和整条
+轻量多段线圆角，输入半径、拾取位置及是否修剪。默认 `dry_run=true` 只预检；正式执行
+回读几何变化和圆角半径，恢复原圆角/捕捉设置及临时视图，不自动保存。短边可能被 AutoCAD 跳过，
+以返回的实际图元和 `rounded_arc_count` 为准。完整参数见[工具契约](skills/cad-mcp/references/tool-contracts.md#原生圆角)。
 
 ## 安装
 

@@ -45,6 +45,18 @@ uv run pytest tests/integration/test_runtime_fault_simulation.py tests/integrati
 
 上述结果证明 MCP 能处理失效工作进程，不能证明真实 AutoCAD 内部操作已中止或回滚。真实 CAD 的正常往返验证需单独运行下节用例。
 
+## 原生圆角验证
+
+不连接 AutoCAD 的专项测试：`uv run pytest tests/unit/test_fillet.py`，覆盖输入校验、默认零写入、命令选边、圆弧及多段线半径回读、系统变量恢复、失败撤销，以及无变化时不撤销前次操作。
+
+真实圆角往返测试为 `tests/integration/test_fillet_acad.py`。必须先手动打开 AutoCAD，并在用户授权后设置下节开关，再运行 `uv run pytest tests/integration/test_fillet_acad.py -m acad -s`。测试只探测已有实例，在独立临时图纸中检查 Trim/NoTrim、旋转 UCS 下的 WCS 拾取、整体多段线圆角及零半径恢复，关闭临时图纸时不保存。
+
+异常和边界测试位于 `tests/integration/test_fillet_edges_acad.py`，单独运行 `uv run pytest tests/integration/test_fillet_edges_acad.py -m acad -x -s`。覆盖锁层、无效句柄/半径、倾斜及不同标高、短边、平行线原生半径变化、远坐标、同一多段线选边、误选保护、圆/圆弧组合和真实撤销。故障注入必须先记录本次命令完成标记与实际几何变化，再人为报错；恢复几何、设置及实际视图并确认 `rollback_status=succeeded` 后才记录通过。详细结果见[圆角实测记录](validation/native-fillet-2026-10-21.md)。
+
+实测中，将两组新建/关闭临时图纸用例放在同一个测试进程运行时，曾出现公共图层查询的 `<unknown>.Item` 异常，原因尚未定位；独立进程的边界测试已完成整套回归。上述两份实机测试建议分别启动进程，不能把进程隔离视为该公共查询问题已修复。自动测试中的 COM 替身不能代替真实 AutoCAD 结果。
+
+命令调用依据：[AutoLISP command-s](https://help.autodesk.com/cloudhelp/2023/ENU/AutoCAD-AutoLISP-Reference/files/GUID-5C9DC003-3DD2-4770-95E7-7E19A4EE19A1.htm)、[FILLET 拾取位置](https://help.autodesk.com/cloudhelp/2023/ENU/AutoCAD-AutoLISP/files/GUID-EF2D73CE-9B75-4532-AF2F-DD6F0C36C3FD.htm)和[二维圆角操作](https://help.autodesk.com/cloudhelp/2026/ENU/AutoCAD-Core/files/GUID-696681C1-4B8B-4995-8903-CCE6686179EA.htm)。
+
 ## 真实 AutoCAD 集成测试
 
 默认测试不会连接或启动用户的 AutoCAD。只有明确设置开关后，才运行隔离的真实
