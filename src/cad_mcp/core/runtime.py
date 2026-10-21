@@ -260,6 +260,7 @@ def backend_capabilities(mode: str) -> Dict[str, Any]:
         return {
             **common,
             "engine": "autocad_com",
+            "native_extend": True,
             "native_format": "dwg",
             "native_dwg": True,
             "autocad_required": True,

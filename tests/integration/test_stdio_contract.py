@@ -1,7 +1,7 @@
+import asyncio
 import json
 import os
 from pathlib import Path
-import subprocess
 import sys
 
 
@@ -24,7 +24,6 @@ def test_stdio_initialize_and_tool_list(tmp_path):
         {"jsonrpc": "2.0", "method": "notifications/initialized"},
         {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
     ]
-    payload = "".join(json.dumps(item) + "\n" for item in requests)
     env = os.environ.copy()
     env.update(
         {
@@ -40,29 +39,48 @@ def test_stdio_initialize_and_tool_list(tmp_path):
         }
     )
 
-    completed = subprocess.run(
-        [sys.executable, "-m", "cad_mcp"],
-        cwd=PLUGIN_ROOT,
-        env=env,
-        input=payload,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        timeout=30,
-        check=False,
-    )
+    async def exchange():
+        process = await asyncio.create_subprocess_exec(
+            sys.executable, "-B", "-m", "cad_mcp", cwd=PLUGIN_ROOT, env=env,
+            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, limit=8*1024*1024,
+            stderr=asyncio.subprocess.PIPE)
+        stderr = asyncio.create_task(process.stderr.read())
+        async def receive(expected_id):
+            while True:
+                line = await process.stdout.readline()
+                assert line, "MCP exited before returning the expected response"
+                item = json.loads(line.decode("utf-8"))
+                if item.get("id") == expected_id:
+                    return item
+        try:
+            process.stdin.write((json.dumps(requests[0])+"\n").encode("utf-8"))
+            await process.stdin.drain()
+            initialize = await receive(1)
+            for request in requests[1:]:
+                process.stdin.write((json.dumps(request)+"\n").encode("utf-8"))
+            await process.stdin.drain()
+            tool_list = await receive(2)
+            # EOF must follow both responses, not cancel tools/list in flight.
+            process.stdin.close()
+            await process.wait()
+            assert process.returncode == 0, (await stderr).decode("utf-8")
+            return initialize, tool_list
+        finally:
+            if process.returncode is None:
+                process.kill()
+                await process.wait()
+            await stderr
 
-    assert completed.returncode == 0, completed.stderr
-    responses = [json.loads(line) for line in completed.stdout.splitlines() if line]
-    initialize = next(item for item in responses if item.get("id") == 1)
-    tool_list = next(item for item in responses if item.get("id") == 2)
+    initialize, tool_list = asyncio.run(asyncio.wait_for(exchange(), timeout=30))
     tools = {tool["name"]: tool for tool in tool_list["result"]["tools"]}
     names = set(tools)
 
     assert initialize["result"]["serverInfo"]["name"] == "cad_mcp"
-    assert len(names) == 104
+    assert initialize["result"]["protocolVersion"] == "2024-11-05"
+    assert len(names) == 105
     assert {
         "cad_health",
+        "cad_extend",
         "cad_get_drawing_settings",
         "cad_set_drawing_settings",
         "cad_list_layers_detailed",

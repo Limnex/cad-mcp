@@ -34,6 +34,7 @@ from cad_mcp.drawing.document import (
     LAYER_FILL,
 )
 from cad_mcp.drawing.entity_properties import EntityPropertyPatch
+from cad_mcp.drawing.native_extend import validate_request as validate_extend_request
 from cad_mcp.core.geometry import (
     MAX_TABLE_COLUMNS,
     MAX_TABLE_ROWS,
@@ -160,7 +161,7 @@ class _AcadLockProxy:
     dxf 模式不经此代理（不碰 AutoCAD，无需锁）。
     """
 
-    # edit_entity_properties owns its undo group after preflight: an empty group
+    # edit_entity_properties and extend_entity own their undo groups after preflight: an empty group
     # followed by U could otherwise undo the preceding successful operation.
     _MUTATING_METHODS = {
         "create_layer", "set_layer_props", "set_active_layer",
@@ -511,6 +512,49 @@ def cad_trim(params: TrimInput) -> str:
         r = _get_backend().trim(params.subject_handle, params.cutting_handles,
                                 params.pick_x, params.pick_y)
         return _ok({"ok": True, **r})
+    except Exception as e:
+        return _fail(e)
+
+
+class ExtendInput(ToolInput):
+    subject_handle: str = Field(..., description="目标实体的十进制句柄：LINE、ARC 或开放 LWPOLYLINE", min_length=1, max_length=40)
+    boundary_handles: List[str] = Field(..., description="延伸边界的十进制句柄：LINE、ARC、CIRCLE 或 LWPOLYLINE", min_length=1, max_length=100)
+    endpoint: Literal["start", "end"] = Field(..., description="延伸起点 start 或终点 end")
+    extend_edges: bool = Field(default=False, strict=True, description="是否允许延伸到边界的假想延长线")
+    dry_run: bool = Field(default=True, strict=True, description="默认仅预检，不执行原生命令，也不预测交点")
+
+    @model_validator(mode="after")
+    def valid_selection(self):
+        self.subject_handle, self.boundary_handles = validate_extend_request(
+            self.subject_handle, self.boundary_handles, self.endpoint, self.extend_edges, self.dry_run)
+        return self
+
+
+@mcp.tool(
+    name="cad_extend",
+    annotations={
+        "title": "原生延伸图元",
+        "readOnlyHint": False,
+        "destructiveHint": True,
+        "idempotentHint": False,
+        "openWorldHint": False,
+    },
+)
+def cad_extend(params: ExtendInput) -> str:
+    """调用 AutoCAD 原生 EXTEND，将指定一端延伸至指定边界。
+
+    目标与边界须在模型空间同一 XY 平面；不投影。先查询十进制句柄，
+    指定 endpoint=start/end。dry_run 默认只预检，不保证存在交点。
+    正式执行后回读几何、核对边界和另一端；失败时报告撤销状态，不自动保存。
+    """
+    try:
+        backend = _get_backend()
+        operation = getattr(backend, "extend_entity", None)
+        if operation is None:
+            raise NotImplementedError("当前后端没有原生命令接口")
+        return _ok({"ok": True, **operation(
+            params.subject_handle, params.boundary_handles, params.endpoint,
+            extend_edges=params.extend_edges, dry_run=params.dry_run)})
     except Exception as e:
         return _fail(e)
 
