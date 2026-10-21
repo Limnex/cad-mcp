@@ -44,6 +44,29 @@ def _record(handle: str, fingerprint: str, **kwargs) -> ManagedEntityRecord:
     )
 
 
+@pytest.mark.parametrize("key,value", [
+    ("semantic_name", "二沉池"), ("semantic_type", "secondary_clarifier"),
+    ("semantic_source", "design_model"), ("semantic_status", "declared"),
+    ("parent_id", "T1"),
+])
+def test_descriptive_identity_does_not_change_geometry_fingerprint(key, value):
+    original = _operation()
+    enriched = original.model_copy(deep=True)
+    enriched.metadata[key] = value
+    assert operation_fingerprint(enriched) == operation_fingerprint(original)
+    assert operation_fingerprint(enriched, include_identity_metadata=True) != operation_fingerprint(original)
+
+
+def test_real_operation_changes_still_change_the_fingerprint():
+    original = _operation()
+    geometry = original.model_copy(deep=True)
+    geometry.params["x2"] = 2
+    metadata = original.model_copy(deep=True)
+    metadata.metadata["component_kind"] = "partition_wall"
+    assert operation_fingerprint(geometry) != operation_fingerprint(original)
+    assert operation_fingerprint(metadata) != operation_fingerprint(original)
+
+
 def test_replace_scope_never_deletes_foreign_project() -> None:
     foreign = _record("P1-H1", "old", project_id="P1")
     difference = reconcile_plan(_plan(), [foreign], "replace_scope")
@@ -151,6 +174,9 @@ def test_execute_operation_writes_group_metadata_to_every_handle() -> None:
 
         def set_entity_metadata(self, handle, metadata):
             self.metadata[handle] = metadata
+
+        def get_entity_metadata(self, handle):
+            return self.metadata.get(handle)
 
     backend = Backend()
     execute_operation(

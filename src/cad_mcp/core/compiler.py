@@ -20,6 +20,7 @@ from cad_mcp.engineering.profile import compile_profile
 from cad_mcp.engineering.schedules import compile_schedule
 from cad_mcp.engineering.standards import AnyDraftingProfile, apply_layer_styles
 from cad_mcp.core.validation import validate_model
+from cad_mcp.core.semantics import model_objects, object_metadata
 
 
 class ModelValidationError(ValueError):
@@ -134,6 +135,13 @@ def compile_environment_model(
     operations = _deduplicate_layer_operations(operations)
     if drafting_profile is not None:
         operations = apply_layer_styles(operations, drafting_profile)
+    identities = {obj.object_id: obj for obj in model_objects(model)}
+    for operation in operations:
+        if operation.kind != "ensure_layer":
+            identity = identities.get(operation.semantic_id)
+            if identity is None:
+                raise ValueError(f"绘图操作缺少工程对象定义: {operation.semantic_id}")
+            operation.metadata.update(object_metadata(identity))
     statistics = dict(Counter(operation.kind for operation in operations))
     plan = DrawingPlan(
         project_id=model.project_id,

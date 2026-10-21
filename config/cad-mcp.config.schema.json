@@ -12,6 +12,10 @@
       "type": "string",
       "minLength": 1
     },
+    "semantic_policy": {
+      "enum": ["strict", "legacy"],
+      "default": "strict"
+    },
     "mode": {
       "enum": ["dxf", "acad"]
     }
