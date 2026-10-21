@@ -88,7 +88,7 @@ AutoCAD 圆角使用 `cad_fillet`：先查十进制句柄，指定半径、拾�
 
 ## 运行时安全契约
 
-当前运行时版本为 `1.5.3`，注册 108 个 `cad_*` 工具。每次会话先调用 `cad_health(reconnect=false)`，核对模式、连接、文档状态、服务端与 Python 版本、后端能力和最近错误编号；用户明确 CAD 已打开且要求操作图纸时，可使用 `reconnect=true` 连接已有实例，无须额外确认。CAD 运行状态未知时先向用户确认。
+当前运行时版本为 `1.5.3`，注册 109 个 `cad_*` 工具。每次会话先调用 `cad_health(reconnect=false)`，核对模式、连接、文档状态、服务端与 Python 版本、后端能力和最近错误编号；用户明确 CAD 已打开且要求操作图纸时，可使用 `reconnect=true` 连接已有实例，无须额外确认。CAD 运行状态未知时先向用户确认。
 
 - 所有公开工具输入拒绝未知字段，数值字段拒绝 `NaN`、正无穷和负无穷；参数校验失败视为未执行写入，不得猜测参数后继续。
 - 工具函数捕获的运行错误返回 `ok: false`、`error` 和 `error_detail`；读取其中的 `code`、`operation`、`retryable`、`hint` 和 `request_id`。

@@ -3078,6 +3078,11 @@ class AcadBackend(AcadDwtMixin):
         from cad_mcp.drawing.entity_properties import edit_entity_properties
         return edit_entity_properties(self, handle, properties, dry_run=dry_run, mode="acad")
 
+    def chamfer(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """预检后调用原生 CHAMFER；本方法自行管理撤销组，预览不写入。"""
+        from cad_mcp.drawing.chamfer import chamfer
+        return chamfer(self, payload)
+
     def _find(self, handle: str):
         """按句柄（十进制字符串）在模型空间查找图元。"""
         try:

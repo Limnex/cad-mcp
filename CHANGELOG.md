@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add `cad_chamfer` for native AutoCAD CHAMFER with distance/distance-angle methods, trim/no-trim, LINE/RAY/XLINE pairs, adjacent straight segments of one 2D polyline, whole-polyline and sequential batch operations. Default to zero-write preview; verify native geometry, restore settings/view, and roll back the entire batch on failure. Leave the DXF backend unchanged.
+
 - Default MCP geometry creation to strict semantic identity: persist engineering object registrations inside drawings, require object/role bindings before direct drawing, and atomically create, attach and verify entity identity. Cover copy/array/block/layout and environment-model workflows through both toolsets; expose semantic reads and read-only audits. Add operator-only startup compatibility policy and block further writes after an unverified semantic rollback.
 
 - Extend entity property editing to planar ARC, LWPOLYLINE, INSERT, HATCH, ELLIPSE and POINT. Preserve elevations/Z scale, per-segment polyline data, hatch loops/holes/associativity, and attached attribute geometry. Add formatted attribute values and copy-on-write fixed/nested block text edits scoped to the selected instance; preflight unsupported dependencies and verify rollback removes cloned definitions.

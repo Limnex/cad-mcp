@@ -23,7 +23,7 @@ def test_production_stdio_executes_tools_in_persistent_worker(tmp_path, toolset)
             async with ClientSession(reader, writer) as session:
                 await session.initialize()
                 tools = await session.list_tools()
-                assert len(tools.tools) == (108 if toolset == "all" else 3)
+                assert len(tools.tools) == (109 if toolset == "all" else 3)
 
                 async def call(name, params):
                     if toolset == "webcodex":
