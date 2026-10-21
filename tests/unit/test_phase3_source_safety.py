@@ -271,6 +271,17 @@ def test_create_viewport_activates_layout_through_document_property(
     monkeypatch.setattr(backend, "_get_layout", lambda name: layout)
     monkeypatch.setattr(cad_acad, "_pt", lambda x, y, z=0.0: (x, y, z))
     monkeypatch.setattr(cad_acad, "_pt2", lambda values: tuple(values))
+    # Activation is tested here; strict COM positioning and failed native
+    # readback are exercised in test_sheet_layout, not by arbitrary attributes.
+    def configure(viewport, desired, lock=True):
+        assert backend.doc.ActiveLayout is layout
+        assert backend.doc.MSpace is False
+        assert desired["model_center"] == [500, 600, 0.0]
+        assert desired["custom_scale"] == 0.01
+        return {"paper_center": desired["paper_center"], "paper_size": desired["paper_size"],
+                "model_center": desired["model_center"], "custom_scale": desired["custom_scale"],
+                "locked": lock}
+    monkeypatch.setattr(backend, "_configure_sheet_viewport", configure)
 
     result = backend.create_viewport(
         layout_name="Sheet-A3",
@@ -286,9 +297,8 @@ def test_create_viewport_activates_layout_through_document_property(
 
     assert backend.doc.ActiveLayout is layout
     assert backend.doc.variables == [("TILEMODE", 0)]
-    assert viewport.display_calls == [True]
-    assert viewport.ViewCenter == (500, 600)
-    assert viewport.DisplayLocked is True
+    assert result["verified"] is True
+    assert result["model_center"] == [500, 600]
     assert result["handle"] == "10"
 
 

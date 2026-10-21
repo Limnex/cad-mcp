@@ -65,6 +65,8 @@ from cad_mcp.core.runtime import (
 from cad_mcp.core.open_paths import resolve_open_drawing_path
 from cad_mcp.drawing.hatch_regions import fill_acad_region
 from cad_mcp.drawing.hatch_regions import acad_source, refresh_valid_hatch
+from cad_mcp.drawing.layouts import AcadLayoutMixin
+from cad_mcp.drawing.com_read import bounding_box, out_pair
 from cad_mcp.core.hatch_boundaries import validate_source
 
 # 保存格式常量（AutoCAD 文件格式枚举）：64 = ac2018_dwg
@@ -339,7 +341,7 @@ class _ComRetryProxy:
         return ret
 
 
-class AcadBackend(AcadDwtMixin):
+class AcadBackend(AcadLayoutMixin, AcadDwtMixin):
     """直接操控本地 AutoCAD 的绘图后端。"""
 
     def __init__(self, drawings_dir: Path):
@@ -1066,7 +1068,7 @@ class AcadBackend(AcadDwtMixin):
                             "default": str(getattr(entity, "TextString", "")),
                         })
                     try:
-                        low, high = entity.GetBoundingBox()
+                        low, high = bounding_box(entity)
                         xmin, ymin = min(xmin, float(low[0])), min(ymin, float(low[1]))
                         xmax, ymax = max(xmax, float(high[0])), max(ymax, float(high[1]))
                         has_bounds = True
@@ -2823,31 +2825,35 @@ class AcadBackend(AcadDwtMixin):
         model_center_y: float,
         scale_denominator: float,
         lock: bool = True,
+        model_mm_per_unit: float = 1.0,
     ) -> Dict[str, Any]:
         """在固定图框布局中创建并锁定指定比例的视口。"""
         self._check_doc()
-        if min(width, height, scale_denominator) <= 0:
+        if not all(math.isfinite(float(v)) for v in (center_x, center_y, width, height,
+                model_center_x, model_center_y, scale_denominator, model_mm_per_unit)):
+            raise ValueError("视口参数必须为有限数值")
+        if min(width, height, scale_denominator, model_mm_per_unit) <= 0:
             raise ValueError("视口宽高和比例分母必须大于 0")
         layout = self._get_layout(layout_name)
         self.doc.SetVariable("TILEMODE", 0)
+        self.doc.MSpace = False
         self._activate_layout(layout)
         viewport = self.doc.PaperSpace.AddPViewport(_pt(center_x, center_y), width, height)
-        viewport.Display(True)
-        viewport.CustomScale = 1.0 / float(scale_denominator)
-        try:
-            viewport.ViewCenter = _pt2([model_center_x, model_center_y])
-        except Exception:
-            pass
-        viewport.DisplayLocked = bool(lock)
+        custom_scale = float(model_mm_per_unit) / float(scale_denominator)
+        readback = self._configure_sheet_viewport(viewport, {
+            "paper_center": [center_x, center_y], "paper_size": [width, height],
+            "model_center": [model_center_x, model_center_y, 0.0],
+            "custom_scale": custom_scale, "model_view_height": height/custom_scale}, lock=lock)
         return {
             "layout_name": layout_name,
             "handle": self._handle_str(viewport.Handle),
-            "paper_center": [center_x, center_y],
-            "paper_size": [width, height],
-            "model_center": [model_center_x, model_center_y],
+            "paper_center": readback["paper_center"],
+            "paper_size": readback["paper_size"],
+            "model_center": readback["model_center"][:2],
             "scale_denominator": scale_denominator,
-            "custom_scale": 1.0 / float(scale_denominator),
-            "locked": bool(lock),
+            "custom_scale": readback["custom_scale"],
+            "locked": readback["locked"],
+            "verified": True,
         }
 
     def configure_layout_plot(
@@ -3480,7 +3486,7 @@ class AcadBackend(AcadDwtMixin):
                 continue
         if not names:
             try:
-                low, high = entity.GetBoundingBox()
+                low, high = bounding_box(entity)
                 payload["bounds"] = [self._com_state_value(low), self._com_state_value(high)]
             except Exception:
                 pass
@@ -3525,7 +3531,7 @@ class AcadBackend(AcadDwtMixin):
         if entity is None:
             raise ValueError(f"未找到句柄为 {handle} 的图元")
         try:
-            result = entity.GetXData(XDATA_APP_NAME)
+            result = out_pair(entity,"GetXData",leading=(XDATA_APP_NAME,))
         except Exception:
             return None
         chunks = self._xdata_chunks(result)
@@ -3537,7 +3543,7 @@ class AcadBackend(AcadDwtMixin):
         for index in range(self.msp.Count):
             entity = self.msp.Item(index)
             try:
-                result = entity.GetXData(XDATA_APP_NAME)
+                result = out_pair(entity,"GetXData",leading=(XDATA_APP_NAME,))
             except Exception:
                 continue
             chunks = self._xdata_chunks(result)

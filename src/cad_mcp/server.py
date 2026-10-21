@@ -74,6 +74,7 @@ from cad_mcp.engineering.templates import (
     load_template_manifest,
     verify_template_source,
 )
+from cad_mcp.engineering.layouts import LayoutRequest
 from cad_mcp.core.validation import validate_model
 from cad_mcp.core.runtime import (
     UnsupportedModeError, failure_json, setup_logging, success_json,
@@ -1602,6 +1603,8 @@ class EvaluateViewportFitInput(ToolInput):
     margin_bottom: float = Field(default=0, description="下侧不可用高度（毫米）", ge=0)
     scale_denominator: Optional[float] = Field(
         default=None, description="待校核的比例分母，如 200 表示 1:200；留空只返回最小所需分母", gt=0)
+    model_mm_per_unit: float = Field(default=1.0, gt=0, le=1e9,
+        description="一个模型坐标单位对应多少毫米，米制模型传1000")
 
 
 @_tool(
@@ -1624,8 +1627,9 @@ def cad_evaluate_viewport_fit(params: EvaluateViewportFitInput) -> str:
         usable_h = params.paper_height - params.margin_top - params.margin_bottom
         if usable_w <= 0 or usable_h <= 0:
             raise ValueError("扣除边距后图幅可用宽度和高度必须大于 0")
-        required = max(float(ext["width"]) / usable_w,
-                       float(ext["height"]) / usable_h)
+        model_w = float(ext["width"])*params.model_mm_per_unit
+        model_h = float(ext["height"])*params.model_mm_per_unit
+        required = max(model_w / usable_w, model_h / usable_h)
         result: Dict[str, Any] = {
             "ok": True,
             "geometry": ext,
@@ -1633,8 +1637,8 @@ def cad_evaluate_viewport_fit(params: EvaluateViewportFitInput) -> str:
             "minimum_scale_denominator": required,
         }
         if params.scale_denominator is not None:
-            drawn_w = float(ext["width"]) / params.scale_denominator
-            drawn_h = float(ext["height"]) / params.scale_denominator
+            drawn_w = model_w / params.scale_denominator
+            drawn_h = model_h / params.scale_denominator
             result["evaluation"] = {
                 "scale_denominator": params.scale_denominator,
                 "fits": drawn_w <= usable_w and drawn_h <= usable_h,
@@ -2982,6 +2986,7 @@ class EvaluateTemplateSheetScalesInput(ToolInput):
     content_bounds: Tuple[float, float, float, float]
     candidate_denominators: List[float] = Field(min_length=1, max_length=100)
     annotation_padding_model: float = Field(default=0, ge=0)
+    model_mm_per_unit: float = Field(default=1.0, gt=0, le=1e9)
 
 
 @_tool(name="cad_evaluate_template_sheet_scales", annotations={
@@ -2995,7 +3000,7 @@ def cad_evaluate_template_sheet_scales(params: EvaluateTemplateSheetScalesInput)
             raise ValueError(f"模板中不存在图幅 {params.sheet_id}")
         return _ok({"ok": True, **evaluate_sheet_scales(
             params.content_bounds, sheet, params.candidate_denominators,
-            params.annotation_padding_model)})
+            params.annotation_padding_model, params.model_mm_per_unit)})
     except Exception as e:
         return _fail(e)
 
@@ -3066,6 +3071,57 @@ def cad_fill_template_fields(params: FillTemplateFieldsInput) -> str:
         return _fail(e)
 
 
+class PreviewSheetLayoutInput(LayoutRequest, ToolInput):
+    pass
+
+
+class ApplySheetLayoutInput(LayoutRequest, SemanticToolInput):
+    confirmation_token: str = Field(min_length=1, max_length=200)
+
+
+class ValidateSheetLayoutInput(LayoutRequest, ToolInput):
+    pass
+
+
+def _sheet_backend():
+    backend = _get_backend()
+    if not hasattr(backend, "preview_sheet_layout"):
+        raise UnsupportedModeError("完整图框布局仅支持 acad 模式")
+    return backend
+
+
+@_tool(name="cad_preview_sheet_layout", annotations={"title":"预览纸框匹配与模型布局",
+    "readOnlyHint":True,"destructiveHint":False,"idempotentHint":True,"openWorldHint":False})
+def cad_preview_sheet_layout(params: PreviewSheetLayoutInput) -> str:
+    """只读预览：纸框匹配→有效绘图区→指定内容与比例；有冲突不发确认令牌。"""
+    try:
+        return _ok({"ok":True,**_sheet_backend().preview_sheet_layout(**params.model_dump())})
+    except Exception as exc:
+        return _fail(exc)
+
+
+@_tool(name="cad_apply_sheet_layout", annotations={"title":"应用已确认的完整布局",
+    "readOnlyHint":False,"destructiveHint":True,"idempotentHint":False,"openWorldHint":False})
+def cad_apply_sheet_layout(params: ApplySheetLayoutInput) -> str:
+    """凭有效预览令牌在一个撤销组内应用；只更新同 layout_id 的受管对象，不保存。"""
+    try:
+        return _ok({"ok":True,**_sheet_backend().apply_sheet_layout(
+            **params.model_dump(exclude={"semantic"}),
+            semantic_binding=params.semantic.model_dump() if params.semantic else None)})
+    except Exception as exc:
+        return _fail(exc)
+
+
+@_tool(name="cad_validate_sheet_layout", annotations={"title":"独立核验布局与视口",
+    "readOnlyHint":True,"destructiveHint":False,"idempotentHint":True,"openWorldHint":False})
+def cad_validate_sheet_layout(params: ValidateSheetLayoutInput) -> str:
+    """独立读取纸张、图框及原生视口数据，不以模型图面体检替代布局检查。"""
+    try:
+        return _ok({"ok":True,**_sheet_backend().validate_sheet_layout(**params.model_dump())})
+    except Exception as exc:
+        return _fail(exc)
+
+
 class CreateViewportInput(SemanticToolInput):
     model_config = ConfigDict(str_strip_whitespace=True)
     layout_name: str
@@ -3077,6 +3133,7 @@ class CreateViewportInput(SemanticToolInput):
     model_center_y: float
     scale_denominator: float = Field(gt=0)
     lock: bool = True
+    model_mm_per_unit: float = Field(default=1.0, gt=0, le=1e9)
 
 
 @_tool(name="cad_create_viewport", annotations={"title": "创建并锁定布局视口",
@@ -3090,7 +3147,8 @@ def cad_create_viewport(params: CreateViewportInput) -> str:
         return _ok({"ok": True, **backend.create_viewport(
             params.layout_name, params.center_x, params.center_y,
             params.width, params.height, params.model_center_x,
-            params.model_center_y, params.scale_denominator, params.lock)})
+            params.model_center_y, params.scale_denominator, params.lock,
+            model_mm_per_unit=params.model_mm_per_unit)})
     except Exception as e:
         return _fail(e)
 

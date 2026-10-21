@@ -554,7 +554,7 @@ class FakePlot:
         self.PlotWithLineweights = True
         self.PlotWithPlotStyles = True
         self.UseStandardScale = True
-        self.StandardScale = 1
+        self.StandardScale = 16
         self.custom = (1.0, 1.0)
 
     @property
@@ -627,6 +627,7 @@ def test_acad_page_setup_create_and_idempotent_full_readback(monkeypatch, tmp_pa
     assert second["created"] is False
     assert second["changed"] is False
     assert configs.items[0].center_plot_write_count == 0
+    assert configs.items[0].StandardScale == 16  # ActiveX ac1_1, not imperial code 1
 
 
 def test_acad_page_setup_rejects_center_plot_true_for_layout_before_create(monkeypatch, tmp_path):

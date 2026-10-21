@@ -205,7 +205,8 @@ def entity_metadata(backend, entity):
             return None
         return unpack_metadata([tag.value for tag in entity.get_xdata(XDATA_APP_NAME) if tag.code == 1000])
     from cad_mcp.core.registry import XDATA_APP_NAME
-    chunks = backend._xdata_chunks(entity.GetXData(XDATA_APP_NAME))
+    from cad_mcp.drawing.com_read import out_pair
+    chunks = backend._xdata_chunks(out_pair(entity,"GetXData",leading=(XDATA_APP_NAME,)))
     return unpack_metadata(chunks) if chunks else None
 
 
@@ -283,6 +284,12 @@ def drawing_transaction(backend):
                         rolled_back = marker_gone and _transaction_state(backend) == before_state
                     except Exception:
                         rolled_back = False
+                    probe = getattr(backend, "_layout_rollback_probe", None)
+                    if probe is not None:
+                        try:
+                            rolled_back = rolled_back and bool(probe())
+                        except Exception:
+                            rolled_back = False
             exc.rollback_status = "succeeded" if rolled_back is True else "failed_or_unverified"
         else:
             snapshot.seek(0)
@@ -294,6 +301,9 @@ def drawing_transaction(backend):
                     setattr(backend, name, value)
             exc.rollback_status = "succeeded"
         raise
+    finally:
+        if hasattr(backend, "_layout_rollback_probe"):
+            delattr(backend, "_layout_rollback_probe")
 
 
 # Every tool is classified before exposing it, including the compact gateway.
@@ -308,7 +318,7 @@ CREATE_TOOLS = {
     "cad_draw_title_block", "cad_array_rect", "cad_array_polar", "cad_draw_centerline",
     "cad_offset", "cad_copy_linear", "cad_draw_table", "cad_insert_template_sheet",
     "cad_create_viewport", "cad_draw_mtext", "cad_insert_coordinate_label",
-    "cad_insert_elevation_label", "cad_create_layout", "cad_apply_dwt_profile",
+    "cad_insert_elevation_label", "cad_create_layout", "cad_apply_dwt_profile", "cad_apply_sheet_layout",
 }
 EDIT_TOOLS = {"cad_edit_entity_properties", "cad_delete_entity", "cad_move_entity",
               "cad_rotate_entity", "cad_fill_template_fields", "cad_set_block_attributes",

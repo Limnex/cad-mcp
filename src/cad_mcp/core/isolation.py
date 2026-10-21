@@ -18,6 +18,15 @@ from cad_mcp.core.runtime import CadMcpError, failure_json, health_metadata, suc
 from cad_mcp.core.tool_results import decode_tool_result
 
 
+# Only full sheet workflows need repeated block/native/rollback inspection.
+# Keep every pre-existing tool's deadlines and queue-wait policy unchanged.
+_SHEET_LAYOUT_EXECUTION_TIMEOUTS = {
+    "cad_preview_sheet_layout": 300.0,
+    "cad_apply_sheet_layout": 600.0,
+    "cad_validate_sheet_layout": 300.0,
+}
+
+
 class ToolProcessSupervisor:
     """One persistent serial worker, with deadlines enforced outside that worker."""
 
@@ -205,6 +214,7 @@ class ToolProcessSupervisor:
                 return self.diagnostics()
         self._check_write_allowed(target, write)
         timeout = self._write_timeout if write else self._read_timeout
+        execution_timeout = _SHEET_LAYOUT_EXECUTION_TIMEOUTS.get(target, timeout)
         if not self._gate.acquire(timeout=timeout):
             raise CadMcpError("另一个 CAD 操作仍在执行，当前请求未发送",
                               code="BACKEND_BUSY", hint="等待当前操作返回后检查状态", retryable=True)
@@ -231,7 +241,7 @@ class ToolProcessSupervisor:
             self._sender = sender
             sender.start()
             dispatched = True
-            deadline = time.monotonic() + timeout
+            deadline = time.monotonic() + execution_timeout
             try:
                 response = responses.get(timeout=max(0, deadline - time.monotonic()))
             except queue.Empty as exc:

@@ -1,6 +1,6 @@
 # CAD MCP
 
-CAD MCP 是面向 Codex 等 MCP 客户端的本地 CAD 服务端，提供 111 个 `cad_*` 工具，
+CAD MCP 是面向 Codex 等 MCP 客户端的本地 CAD 服务端，提供 114 个 `cad_*` 工具，
 用于创建、检查和修改 DXF/DWG，配置 DraftingProfile 2.0、DWG 图框、布局视口以及 PDF
 出图。仓库同时包含 Python 服务端、Codex 插件清单和内置 Skill。
 

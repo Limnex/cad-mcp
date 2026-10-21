@@ -188,6 +188,8 @@ LINE、ARC、CIRCLE 和 LWPOLYLINE。句柄使用查询结果中的十进制字�
 
 ## 模板、布局和发布
 
+完整布局优先使用 `cad_preview_sheet_layout` → `cad_apply_sheet_layout` → `cad_validate_sheet_layout`。先证明纸张与固定图框匹配，再按 `usable_regions` 放置模型视口；不得使用整张纸中心替代有效绘图区中心。预设浮动视口应使用 `existing_viewport_handle` 显式复用并保留句柄，不为解决显示异常而删除重建。模板必须明确 `paper_reference_bounds` 和 `printed_bounds`，完整参数、单位约定、归属冲突及验收边界见 [完整布局工作流](../../../docs/sheet-layouts.md)。
+
 模板、布局、视口和正式打印工具仅适用于 `acad` 模式：`cad_clone_template_drawing`、`cad_inspect_template_drawing`、`cad_load_template_manifest`、`cad_verify_template_manifest`、`cad_evaluate_template_sheet_scales`、`cad_create_layout`、`cad_insert_template_sheet`、`cad_fill_template_fields`、`cad_create_viewport`、`cad_configure_layout_plot`、`cad_publish_layout_pdf`。
 
 模板哈希不匹配、字段锚点缺失、可用区域不足或发布失败时，应停止当前步骤，不得自行重画或替换模板。

@@ -46,25 +46,27 @@ _PAPER_UNITS = {"inches": 0, "millimeters": 1, "pixels": 2}
 _PAPER_UNITS_R = {value: key for key, value in _PAPER_UNITS.items()}
 _ROTATION = {0: 0, 90: 1, 180: 2, 270: 3}
 _ROTATION_R = {value: key for key, value in _ROTATION.items()}
+# ActiveX AcPlotScale, not AcViewportScale or .NET StandardScaleType.
+# Values 1..15 are architectural imperial scales; metric ratios start at 16.
 _STANDARD_SCALE = {
     "fit": 0,
-    "1:1": 1,
-    "1:2": 2,
-    "1:4": 3,
-    "1:5": 4,
-    "1:8": 5,
-    "1:10": 6,
-    "1:16": 7,
-    "1:20": 8,
-    "1:30": 9,
-    "1:40": 10,
-    "1:50": 11,
-    "1:100": 12,
-    "2:1": 13,
-    "4:1": 14,
-    "8:1": 15,
-    "10:1": 16,
-    "100:1": 17,
+    "1:1": 16,
+    "1:2": 17,
+    "1:4": 18,
+    "1:5": 19,
+    "1:8": 20,
+    "1:10": 21,
+    "1:16": 22,
+    "1:20": 23,
+    "1:30": 24,
+    "1:40": 25,
+    "1:50": 26,
+    "1:100": 27,
+    "2:1": 28,
+    "4:1": 29,
+    "8:1": 30,
+    "10:1": 31,
+    "100:1": 32,
 }
 _STANDARD_SCALE_R = {value: key for key, value in _STANDARD_SCALE.items()}
 _INSUNITS = {4: "millimeters"}

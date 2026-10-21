@@ -80,7 +80,7 @@ def test_stdio_initialize_and_tool_list(tmp_path):
 
     assert initialize["result"]["serverInfo"]["name"] == "cad_mcp"
     assert initialize["result"]["protocolVersion"] == "2024-11-05"
-    assert len(names) == 111
+    assert len(names) == 114
     assert {
         "cad_health",
         "cad_extend",
@@ -98,6 +98,7 @@ def test_stdio_initialize_and_tool_list(tmp_path):
         "cad_create_or_update_ctb",
         "cad_apply_environment_drawing",
         "cad_create_viewport",
+        "cad_preview_sheet_layout", "cad_apply_sheet_layout", "cad_validate_sheet_layout",
         "cad_publish_layout_pdf",
         "cad_audit_block_definition",
         "cad_fill_closed_boundary_solid",

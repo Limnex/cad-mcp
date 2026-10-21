@@ -54,7 +54,7 @@ def test_preview_image_and_path_cross_production_stdio(tmp_path, toolset):
                 assert len(entities["entities"]) == 1
                 _, health = await call("cad_health", {})
                 assert health["document_open"]
-                assert health["tool_count"] == (111 if toolset == "all" else 3)
+                assert health["tool_count"] == (114 if toolset == "all" else 3)
                 assert health["worker"]["generation"] == 1
                 assert not health["worker"]["write_result_unknown"]
 

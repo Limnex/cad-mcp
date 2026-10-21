@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import shutil
 import tempfile
@@ -85,6 +86,12 @@ class SheetTemplate(TemplateModel):
     block_name: str = Field(min_length=1, max_length=160)
     source_bounds: Bounds
     usable_regions: List[PaperRegion] = Field(min_length=1, max_length=64)
+    paper_reference_bounds: Optional[Bounds] = Field(default=None,
+        description="块定义坐标中的物理纸张参考矩形；不是内部边框的包围盒")
+    printed_bounds: Optional[Bounds] = Field(default=None,
+        description="块定义坐标中所有需打印图框线的范围")
+    reserved_regions: List[PaperRegion] = Field(default_factory=list, max_length=64,
+        description="图签等预留区域；与 usable_regions 一样使用纸张左下角起算的毫米坐标")
     fields: Dict[str, TemplateField] = Field(default_factory=dict, max_length=256)
     tables: Dict[str, TableTemplate] = Field(default_factory=dict, max_length=64)
     fixed_insert_scale: float = Field(
@@ -239,6 +246,7 @@ def evaluate_sheet_scales(
     sheet: SheetTemplate,
     candidate_denominators: Sequence[float],
     annotation_padding_model: float = 0.0,
+    model_mm_per_unit: float = 1.0,
 ) -> Dict[str, object]:
     """固定图框不动，逐一校核候选比例能否落入任一可用绘图区。"""
 
@@ -247,7 +255,9 @@ def evaluate_sheet_scales(
     xmin, ymin, xmax, ymax = _expanded_bounds(content_bounds, annotation_padding_model)
     if xmax <= xmin or ymax <= ymin:
         raise ValueError("content_bounds 必须形成正面积矩形")
-    model_width, model_height = xmax - xmin, ymax - ymin
+    if not math.isfinite(model_mm_per_unit) or model_mm_per_unit <= 0:
+        raise ValueError("model_mm_per_unit 必须为正有限数值")
+    model_width, model_height = (xmax - xmin)*model_mm_per_unit, (ymax - ymin)*model_mm_per_unit
     evaluations: List[Dict[str, object]] = []
     for denominator in candidate_denominators:
         denominator = float(denominator)
