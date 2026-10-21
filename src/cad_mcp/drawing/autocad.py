@@ -494,9 +494,14 @@ class AcadBackend(AcadDwtMixin):
             self._yield_com()
             _check_com_scan_deadline()
 
-    def _send_command_and_wait(self, command: str, timeout: float = 20.0) -> None:
+    def _send_command_and_wait(self, command: str, timeout: float = 20.0, *, completion_check=None) -> None:
         """只发送一次 AutoCAD 命令，并等待命令队列确实执行完毕。"""
-        self.doc.SendCommand(command)
+        # Native completion receipts require a single dispatch: a rejected or
+        # disconnected SendCommand must not be replayed by the COM retry proxy.
+        document = self.doc
+        if completion_check is not None and isinstance(document, _ComRetryProxy):
+            document = object.__getattribute__(document, "_obj")
+        document.SendCommand(command)
         deadline = time.time() + timeout
         started_at = time.time()
         while time.time() < deadline:
@@ -509,7 +514,8 @@ class AcadBackend(AcadDwtMixin):
                 names = str(self.doc.GetVariable("CMDNAMES") or "").strip()
                 quiet = bool(self.acad.GetAcadState().IsQuiescent)
                 # 给 SendCommand 一个短暂启动窗口，避免在命令尚未入队时误判完成。
-                if time.time() - started_at >= 0.15 and active == 0 and not names and quiet:
+                if (time.time() - started_at >= 0.15 and active == 0 and not names and quiet
+                        and (completion_check is None or completion_check())):
                     return
             except Exception:
                 pass
@@ -3082,6 +3088,13 @@ class AcadBackend(AcadDwtMixin):
         """预检后调用原生 CHAMFER；本方法自行管理撤销组，预览不写入。"""
         from cad_mcp.drawing.chamfer import chamfer
         return chamfer(self, payload)
+
+    def extend_entity(self, subject_handle: str, boundary_handles: List[str], endpoint: str,
+                      *, extend_edges: bool = False, dry_run: bool = True) -> Dict[str, Any]:
+        """通过原生 EXTEND 延伸指定一端，预检后建立独立撤销组并验证结果。"""
+        from cad_mcp.drawing.native_extend import extend_native
+        return extend_native(self, subject_handle, boundary_handles, endpoint,
+                             extend_edges=extend_edges, dry_run=dry_run)
 
     def _find(self, handle: str):
         """按句柄（十进制字符串）在模型空间查找图元。"""

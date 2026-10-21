@@ -72,6 +72,27 @@ DXF 可读写图纸设置、图层、尺寸样式和基础属性块，但不提�
 
 整条多段线示例：`{"mode":"polyline","handles":["12"],"radius":10,"dry_run":true}`。
 
+
+## 原生延伸
+
+`cad_extend(subject_handle, boundary_handles, endpoint, extend_edges=false, dry_run=true)`
+通过 AutoCAD 原生 EXTEND 执行延伸。目标支持 LINE、ARC 和开放 LWPOLYLINE；边界支持
+LINE、ARC、CIRCLE 和 LWPOLYLINE。句柄使用查询结果中的十进制字符串；边界 1–100 个，
+不得重复或包含目标。多段线最多 1000 顶点。
+
+- `endpoint` 必填：`start` 延伸起点，`end` 延伸终点；圆弧起止沿原生逆时针参数定义，多段线沿顶点顺序定义。
+- 仅处理模型选项卡、同一标高的 XY 平面实体；圆弧/多段线法向须为 WCS +Z。目标图层锁定、闭合目标、退化端段和不合法句柄在执行前拒绝。
+- `extend_edges=false` 仅使用实际边界，`true` 允许使用边界的假想延长线；始终关闭投影。多个边界的实际选择由原生 EXTEND 决定。
+- `dry_run=true` 零写入，只返回当前几何和 `preflight_passed=true`；不执行试延伸、不预测交点，`applied=false, verified=false`，`before` 与 `after` 相同。
+- 正式执行使用一个撤销组，临时切换标准延伸模式、关闭捕捉/预选和投影，临时放大所选端段，完成后恢复原视图、坐标系及系统变量并回读核对。拾取点通过当前 UCS 转换，原实体句柄保留。生成的指令通过临时 Lisp 文件加载，避免长命令行截断；不修改 CAD 的脚本安全设置。
+- 成功返回 `applied=true, verified=true`、`before/after`；核对长度增加、所选端点实际到达指定边界、另一端及边界保持原值。返回坐标为 WCS 毫米，圆弧快照角度为弧度。预检通过不能代替正式验证。
+- 原生命令无几何变化返回 `NO_GEOMETRY_CHANGE`；已完成的失败操作按实际变化决定是否撤销，并回读核对。`error_detail.details.rollback_status` 为 `not_needed`、`succeeded` 或 `failed_or_unverified`。
+- 未确认原生命令完成或回滚无法核实时返回 `EXECUTION_UNKNOWN`；stdio 监控器阻止后续写入，需人工核对 CAD 后重启 MCP。不自动重试，不自动保存。
+
+```json
+{"params":{"subject_handle":"123","boundary_handles":["456"],"endpoint":"end","dry_run":true}}
+```
+
 ## 已有实体属性读取与编辑
 
 - `cad_get_entity_properties(handle)`：只读，句柄为现有查询工具返回的十进制字符串。返回 `type`、`properties`、`true_color` 与 `editable_properties`。仅支持模型空间图形实体，拒绝块定义内部、纸空间及非图形对象；句柄不存在返回 `NOT_FOUND`。

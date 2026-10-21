@@ -20,7 +20,7 @@ from cad_mcp.core.runtime import CadMcpError, failure_json, health_metadata, suc
 class ToolProcessSupervisor:
     """One persistent serial worker, with deadlines enforced outside that worker."""
 
-    def __init__(self, *, mode="acad", tool_count=109, command=None,
+    def __init__(self, *, mode="acad", tool_count=110, command=None,
                  read_timeout=30.0, write_timeout=120.0, startup_timeout=15.0):
         self._command = command or [sys.executable, "-u", "-B", "-m", "cad_mcp.worker"]
         self._read_timeout = read_timeout
@@ -241,6 +241,13 @@ class ToolProcessSupervisor:
             if not isinstance(result, str):
                 raise ValueError("工作进程返回了无效工具结果")
             self._accept_state(response["state"])
+            # Native EXTEND can report an uncertain write while its worker is
+            # responsive. Keep this new result handling scoped to that tool.
+            if target == "cad_extend":
+                outcome = json.loads(result)
+                if (isinstance(outcome, dict) and outcome.get("ok") is False
+                        and outcome.get("error_detail", {}).get("code") == "EXECUTION_UNKNOWN"):
+                    self._write_unknown = True
             if target in {"cad_open_drawing", "cad_new_drawing"} and self._state["document_open"]:
                 try:
                     if json.loads(result).get("ok") is True:

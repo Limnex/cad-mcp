@@ -1,6 +1,6 @@
 # CAD MCP
 
-CAD MCP 是面向 Codex 等 MCP 客户端的本地 CAD 服务端，提供 109 个 `cad_*` 工具，
+CAD MCP 是面向 Codex 等 MCP 客户端的本地 CAD 服务端，提供 110 个 `cad_*` 工具，
 用于创建、检查和修改 DXF/DWG，配置 DraftingProfile 2.0、DWG 图框、布局视口以及 PDF
 出图。仓库同时包含 Python 服务端、Codex 插件清单和内置 Skill。
 
@@ -47,6 +47,15 @@ CAD MCP 只负责把已经确定的数据转换为 CAD 实体。工程尺寸、�
 轻量多段线圆角，输入半径、拾取位置及是否修剪。默认 `dry_run=true` 只预检；正式执行
 回读几何变化和圆角半径，恢复原圆角/捕捉设置及临时视图，不自动保存。短边可能被 AutoCAD 跳过，
 以返回的实际图元和 `rounded_arc_count` 为准。完整参数见[工具契约](skills/cad-mcp/references/tool-contracts.md#原生圆角)。
+
+## 原生延伸
+
+`cad_extend(subject_handle, boundary_handles, endpoint, extend_edges=false, dry_run=true)`
+调用 AutoCAD 原生 EXTEND，将直线、圆弧或开放轻量多段线的一端延伸到指定边界。
+`endpoint` 显式选择 `start` 或 `end`；默认只预检，正式执行使用 `dry_run=false`。
+预检不预测交点；正式结果回读端点和长度，核对另一端与边界，并提供失败撤销状态，不自动保存。
+正式执行临时放大所选端点，结束后恢复原视图和系统变量；预检不改变 CAD。
+详见[工具契约](skills/cad-mcp/references/tool-contracts.md#原生延伸)。
 
 ## 安装
 

@@ -6,6 +6,8 @@
 
 - Default MCP geometry creation to strict semantic identity: persist engineering object registrations inside drawings, require object/role bindings before direct drawing, and atomically create, attach and verify entity identity. Cover copy/array/block/layout and environment-model workflows through both toolsets; expose semantic reads and read-only audits. Add operator-only startup compatibility policy and block further writes after an unverified semantic rollback.
 
+- Add `cad_extend` using AutoCAD's native EXTEND for LINE, ARC and open LWPOLYLINE targets. Preflight selections without writes, explicitly select an endpoint and actual/implied boundary edges, focus the selected terminal segment independently of current zoom, restore the original view and command settings, load generated scripts without long command-line input, verify geometry and intersections, and roll back verified failures without saving. Completion receipts prevent queued commands from appearing finished; uncertain native writes preserve the stdio write barrier.
+
 - Extend entity property editing to planar ARC, LWPOLYLINE, INSERT, HATCH, ELLIPSE and POINT. Preserve elevations/Z scale, per-segment polyline data, hatch loops/holes/associativity, and attached attribute geometry. Add formatted attribute values and copy-on-write fixed/nested block text edits scoped to the selected instance; preflight unsupported dependencies and verify rollback removes cloned definitions.
 
 - Add `cad_get_entity_properties` and `cad_edit_entity_properties` for model-space entities in DXF and AutoCAD. Preview common appearance, TEXT/MTEXT content/height/rotation, LINE endpoints and CIRCLE center/radius; preflight resources and locked layers, verify readback and roll back failures without saving.

@@ -84,6 +84,31 @@ try {
 
 该用例只连接已有实例，在临时图纸中检查创建、图层、查询、微小间隙和健康状态，结束后不保存临时图纸并恢复原活动图纸；同时比较原有文档列表、路径及保存状态。它不在用户图纸中注入卡死或崩溃。
 
+## 原生延伸验证
+
+不连接真实 CAD 的定向测试：
+
+```powershell
+uv run pytest tests/unit/test_native_extend.py
+```
+
+`cad_extend` 的实机用例需先手动打开 AutoCAD，再使用上文的集成测试开关运行：
+
+```powershell
+$env:CAD_MCP_RUN_ACAD_INTEGRATION = '1'
+try {
+    uv run pytest tests/integration/test_native_extend_acad.py tests/integration/test_native_extend_limits_acad.py -m acad
+} finally {
+    Remove-Item Env:CAD_MCP_RUN_ACAD_INTEGRATION
+}
+```
+
+用例在自建临时图纸中检查直线、圆弧、开放多段线的起点和终点延伸，线/圆/圆弧/多段线边界、
+假想延长边界、旋转 UCS、对象捕捉、视图与系统变量恢复和无变化时避免误撤销。边界用例覆盖锁层、不相交、
+不同标高、100 个边界、大坐标小间隙、带弧段多段线、0.0001 极短首段、1000/1001 顶点上限和真实撤销回滚；
+结束后不保存临时图纸并恢复原活动图纸，
+核对原有文档列表和保存状态。默认验证脚本不运行此用例；模拟测试通过不能代表真实 AutoCAD 已验证。
+
 ## GitHub Actions
 
 `.github/workflows/ci.yml` 在 push 和 pull request 时使用 Windows 与 Python 3.12 运行
