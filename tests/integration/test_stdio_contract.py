@@ -6,6 +6,7 @@ import sys
 
 
 
+
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
 SOURCE_DIR = PLUGIN_ROOT / "src"
 
@@ -79,10 +80,13 @@ def test_stdio_initialize_and_tool_list(tmp_path):
 
     assert initialize["result"]["serverInfo"]["name"] == "cad_mcp"
     assert initialize["result"]["protocolVersion"] == "2024-11-05"
-    assert len(names) == 110
+    assert len(names) == 111
     assert {
         "cad_health",
         "cad_extend",
+        "cad_fillet",
+        "cad_chamfer",
+        "cad_preview_region",
         "cad_get_drawing_settings",
         "cad_set_drawing_settings",
         "cad_list_layers_detailed",
@@ -134,3 +138,8 @@ def test_stdio_initialize_and_tool_list(tmp_path):
     ]["properties"]
     assert textstyle_properties["model_height"]["minimum"] == 0
     assert "exclusiveMinimum" not in textstyle_properties["model_height"]
+
+    preview_schema = tools["cad_preview_region"]["inputSchema"]["$defs"]["PreviewRegionInput"]
+    assert set(preview_schema["required"]) == {"x_min", "y_min", "x_max", "y_max"}
+    assert preview_schema["properties"]["include_image"]["default"] is True
+    assert preview_schema["properties"]["width"]["maximum"] == 2048

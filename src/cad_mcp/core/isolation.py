@@ -15,12 +15,13 @@ import time
 import uuid
 
 from cad_mcp.core.runtime import CadMcpError, failure_json, health_metadata, success_json
+from cad_mcp.core.tool_results import decode_tool_result
 
 
 class ToolProcessSupervisor:
     """One persistent serial worker, with deadlines enforced outside that worker."""
 
-    def __init__(self, *, mode="acad", tool_count=110, command=None,
+    def __init__(self, *, mode="acad", tool_count=111, command=None,
                  read_timeout=30.0, write_timeout=120.0, startup_timeout=15.0):
         self._command = command or [sys.executable, "-u", "-B", "-m", "cad_mcp.worker"]
         self._read_timeout = read_timeout
@@ -237,9 +238,7 @@ class ToolProcessSupervisor:
                 raise TimeoutError("工作进程超过外部执行时限") from exc
             if response.get("kind") != "result" or response.get("request_id") != request_id:
                 raise RuntimeError("工作进程退出或通信失效")
-            result = response["result"]
-            if not isinstance(result, str):
-                raise ValueError("工作进程返回了无效工具结果")
+            result = decode_tool_result(response["result"])
             self._accept_state(response["state"])
             # Native EXTEND can report an uncertain write while its worker is
             # responsive. Keep this new result handling scoped to that tool.

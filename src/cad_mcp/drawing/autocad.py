@@ -3073,6 +3073,12 @@ class AcadBackend(AcadDwtMixin):
 
     # ---------- 查询 / 修改 ----------
 
+    def preview_region(self, **kwargs) -> Dict[str, Any]:
+        """临时导出当前文档后渲染局部图像，不另存或调整视图。"""
+        from cad_mcp.drawing.preview import preview_acad_region
+        self._check_doc()
+        return preview_acad_region(self, **kwargs)
+
     def get_entity_properties(self, handle: str) -> Dict[str, Any]:
         """读取模型空间实体属性及可编辑字段。"""
         from cad_mcp.drawing.entity_properties import get_entity_properties

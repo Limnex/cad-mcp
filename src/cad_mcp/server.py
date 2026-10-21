@@ -23,6 +23,8 @@ from typing import Optional, Literal, List, Tuple, Dict, Any
 from pydantic import BaseModel, Field, ConfigDict, ValidationError, model_validator
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
+from mcp.types import CallToolResult
+from cad_mcp.drawing.preview import validate_region, preview_result
 
 from cad_mcp.config import load_settings
 from cad_mcp.drawing.document import (
@@ -294,6 +296,47 @@ class ToolInput(BaseModel):
 class SemanticToolInput(ToolInput):
     semantic: Optional[SemanticBinding] = Field(
         default=None, description="严格模式必填：已登记对象的 project_id、object_id、role，可选 view_id；绘制与身份绑定同时完成")
+
+
+# ================= 工具：局部图像预览 =================
+
+class PreviewRegionInput(ToolInput):
+    x_min: float = Field(ge=-1e12, le=1e12, description="WCS XY 左下角 X，图纸单位")
+    y_min: float = Field(ge=-1e12, le=1e12, description="WCS XY 左下角 Y，图纸单位")
+    x_max: float = Field(ge=-1e12, le=1e12, description="WCS XY 右上角 X，须大于 x_min")
+    y_max: float = Field(ge=-1e12, le=1e12, description="WCS XY 右上角 Y，须大于 y_min")
+    width: int = Field(default=1200, ge=64, le=2048, description="PNG 宽度，像素")
+    height: int = Field(default=800, ge=64, le=2048, description="PNG 高度，像素")
+    background: Literal["white", "black"] = "white"
+    include_image: bool = Field(default=True, description="默认同时返回图片和绝对路径；客户端不支持图片时可设 false 仅返回路径")
+
+    @model_validator(mode="after")
+    def check_region(self):
+        validate_region(**self.model_dump(exclude={"include_image"}))
+        return self
+
+
+@mcp.tool(name="cad_preview_region", structured_output=False,
+          annotations={"title": "局部图像预览", "readOnlyHint": False,
+                       "destructiveHint": False, "idempotentHint": False,
+                       "openWorldHint": False})
+def cad_preview_region(params: PreviewRegionInput) -> CallToolResult | str:
+    """按矩形范围预览当前图纸的模型空间，先保存 PNG，再返回图片与绝对路径。
+
+    两种模式均以 ezdxf 渲染 WCS XY 俯视图，包含未保存修改。acad 临时导出 DXF，
+    不保存原图纸，不缩放视图或修改打印设置。字体、代理对象、外部参照可能与
+    AutoCAD 原生显示不同，外部栅格图片仅占位。范围按图纸单位指定，保持比例留边。
+    PNG 存放在日志目录同级 images/YYYY-MM-DD/，每次使用唯一文件名。
+    默认返回标准 MCP ImageContent 供支持看图的 agent 直接查看，文字含 image_path；
+    include_image=false 可用于客户端拒绝图片时仅取路径。图片文件不会自动删除。
+    """
+    try:
+        metadata = _get_backend().preview_region(
+            log_dir=_SETTINGS.log_dir,
+            **params.model_dump(exclude={"include_image"}))
+        return preview_result(metadata, include_image=params.include_image)
+    except Exception as exc:
+        return _fail(exc)
 
 
 # ================= 工具：图纸管理 =================
@@ -3922,7 +3965,7 @@ async def _gateway_describe(params: GatewayDescribeParams) -> str:
     return _ok({"ok": True, "tool": _tool_descriptor(tool)})
 
 
-async def _gateway_call(params: GatewayCallParams) -> str:
+async def _gateway_call(params: GatewayCallParams) -> CallToolResult | str:
     tool = _FULL_TOOL_REGISTRY.get(params.tool_name)
     if tool is None:
         return _fail(ValueError(f"未知 CAD 工具: {params.tool_name}"))
@@ -3935,7 +3978,7 @@ async def _gateway_call(params: GatewayCallParams) -> str:
         return _fail(exc)
     except Exception as exc:
         return _fail(exc)
-    if isinstance(result, str):
+    if isinstance(result, (str, CallToolResult)):
         return result
     return _ok({"ok": True, "result": result})
 

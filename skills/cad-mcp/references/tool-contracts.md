@@ -240,3 +240,45 @@ stdio 服务的工作进程超时和崩溃另遵循以下约束，不能套用�
 - 健康结果中的 `worker.running`、`pid`、`busy`、`generation` 反映 Python 工作进程状态；`rebind_required` 表示必须重新绑定图纸，`write_result_unknown` 表示写入结果未知。这些字段不证明 AutoCAD 已空闲或内部操作已中止。
 
 运行日志默认写入 `~/.cad-mcp/logs/cad_mcp.log`，可用 `CAD_LOG_DIR` 覆盖；单文件最多 2 MB，保留 2 个轮换备份。日志只记录操作名、错误分类和错误编号，不应记录完整工程模型或绘图参数。
+
+## 局部图像预览
+
+`cad_preview_region` 支持 `dxf` / `acad`，预览当前已打开图纸的模型空间 WCS XY 范围。
+
+| 参数 | 约束 |
+| --- | --- |
+| `x_min`, `y_min` | 必填，左下角，图纸单位 |
+| `x_max`, `y_max` | 必填，右上角，各轴跨度至少 `1e-6`；坐标有限且绝对值不超过 `1e12` |
+| `width`, `height` | PNG 像素宽高，整数 64–2048，默认 1200×800 |
+| `background` | `white` / `black`，默认 `white` |
+| `include_image` | 默认 `true`；`false` 只返回文字和已保存图片路径 |
+
+调用示例：
+
+```json
+{"params":{"x_min":0,"y_min":0,"x_max":10000,"y_max":6000,"width":1200,"height":800,"background":"white"}}
+```
+
+成功返回原生 MCP `CallToolResult`：第一项 `TextContent` 内是 JSON，默认第二项是含完整 PNG
+数据的 `ImageContent`，不把 Base64 当普通文字返回。精简网关也透传这些内容块。
+
+文字字段：`ok`、`mode`、`image_path`（本机绝对路径）、`mime_type`、`width`、`height`、
+`bounds`（四个范围坐标）、`coordinate_system=WCS_XY`、`space=model`、`background`、
+`renderer=ezdxf_matplotlib`、`source`（`live_dxf` / `autocad_dxf_export`）、`byte_size`、
+`created_at`、`warnings` 和 `image_included`。内联读取/编码失败或 PNG 超过 8 MiB 时，
+仍以 `ok=true` 返回保存成功的路径，`image_included=false`，附 `image_error`。
+图片生成或落盘失败则返回现有 `ok=false` 结构化错误，不报告预览成功。
+
+存储根目录为解析后的实际 `log_dir` 的父目录下 `images/`，按本地日期分为 `YYYY-MM-DD/`；
+文件名为 `preview_HHMMSS_微秒_随机标识.png`，使用独占创建，不覆盖已有文件，不自动删除。
+路径文本和图片同时返回只提供两种读取途径；若客户端拒绝整个响应，路径也可能未收到，
+可使用 `include_image=false` 重新获取纯文字响应（会生成新图片）。
+
+DXF 使用内存文档；AutoCAD 使用 `Document.Export(..., "DXF", SelectionSet)` 临时导出，
+结束删除自有选择集和临时文件，不调用 Save/SaveAs，不缩放视图，不修改打印配置。
+输出保持几何比例、裁切超出矩形的内容，宽高比不符时留边。渲染不是 AutoCAD 原生截图：
+字体、代理对象和外部参照可能不同，SHX 大字体可能以系统中文字体预览替换，外部栅格图像
+仅绘制边框。具体限制与跳过对象在 `warnings` 说明。模型空间实体上限 100,000。
+
+该工具会落盘图片，注解为 `readOnlyHint=false`、`destructiveHint=false`、
+`idempotentHint=false`；遵循现有锁和工作进程超时策略，但不进入实体修改撤销组。

@@ -1593,6 +1593,12 @@ class CadDocument(DxfDwtMixin):
 
     # ---------- 查询 / 修改 ----------
 
+    def preview_region(self, **kwargs) -> Dict[str, Any]:
+        """对当前内存文档生成局部图像，不保存图纸。"""
+        from cad_mcp.drawing.preview import render_region
+        self._check_doc()
+        return render_region(self.doc, mode="dxf", **kwargs)
+
     def get_entity_properties(self, handle: str) -> Dict[str, Any]:
         """读取模型空间实体属性及可编辑字段。"""
         from cad_mcp.drawing.entity_properties import get_entity_properties

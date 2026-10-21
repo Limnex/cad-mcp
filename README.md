@@ -1,6 +1,6 @@
 # CAD MCP
 
-CAD MCP 是面向 Codex 等 MCP 客户端的本地 CAD 服务端，提供 110 个 `cad_*` 工具，
+CAD MCP 是面向 Codex 等 MCP 客户端的本地 CAD 服务端，提供 111 个 `cad_*` 工具，
 用于创建、检查和修改 DXF/DWG，配置 DraftingProfile 2.0、DWG 图框、布局视口以及 PDF
 出图。仓库同时包含 Python 服务端、Codex 插件清单和内置 Skill。
 
@@ -56,6 +56,23 @@ CAD MCP 只负责把已经确定的数据转换为 CAD 实体。工程尺寸、�
 预检不预测交点；正式结果回读端点和长度，核对另一端与边界，并提供失败撤销状态，不自动保存。
 正式执行临时放大所选端点，结束后恢复原视图和系统变量；预检不改变 CAD。
 详见[工具契约](skills/cad-mcp/references/tool-contracts.md#原生延伸)。
+
+## 局部图像预览
+
+调用 `cad_preview_region`，指定模型空间 WCS XY 的左下角和右上角，获取局部 PNG：
+
+```json
+{"params":{"x_min":0,"y_min":0,"x_max":10000,"y_max":6000,"width":1200,"height":800,"background":"white"}}
+```
+
+两种模式均包含当前未保存的修改。图片先保存到实际日志目录同级的
+`images/YYYY-MM-DD/preview_时间_唯一标识.png`，然后同时返回标准 MCP 图片内容和文字中的
+`image_path` 绝对路径。支持看图的客户端可把图片直接传给 agent；图片显示失败时可按路径
+另行读取，客户端拒绝图片响应时可用 `include_image=false` 仅获取路径。预览图片不自动删除。
+
+DXF 直接渲染内存文档，AutoCAD 临时导出 DXF 后渲染；不保存原图纸，不调整视图或打印设置。
+这是保持比例的二维俯视预览，字体、代理对象和外部参照可能与 AutoCAD 原生显示不同，外部
+栅格图片仅显示占位边框。详细参数与返回字段见[工具契约](skills/cad-mcp/references/tool-contracts.md#局部图像预览)。
 
 ## 安装
 

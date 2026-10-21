@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add `cad_preview_region` for DXF and AutoCAD modelspace XY regions, preserving live unsaved content. Persist unique PNGs under `images/YYYY-MM-DD/` beside the configured log directory before returning native MCP image content and an absolute fallback path through full/gateway tools and isolated workers. Document ezdxf rendering limits and add pixel, persistence, transport, snapshot-cleanup, and opt-in AutoCAD checks.
+
 - Add `cad_chamfer` for native AutoCAD CHAMFER with distance/distance-angle methods, trim/no-trim, LINE/RAY/XLINE pairs, adjacent straight segments of one 2D polyline, whole-polyline and sequential batch operations. Default to zero-write preview; verify native geometry, restore settings/view, and roll back the entire batch on failure. Leave the DXF backend unchanged.
 
 - Default MCP geometry creation to strict semantic identity: persist engineering object registrations inside drawings, require object/role bindings before direct drawing, and atomically create, attach and verify entity identity. Cover copy/array/block/layout and environment-model workflows through both toolsets; expose semantic reads and read-only audits. Add operator-only startup compatibility policy and block further writes after an unverified semantic rollback.
