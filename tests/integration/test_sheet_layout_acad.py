@@ -81,8 +81,10 @@ def test_isolated_frame_paper_content_roundtrip_and_pdf(tmp_path):
         opened = False
         cad.open_drawing(str(tmp_path/"working.dwg"))
         opened = True
+        state_before = (int(raw.doc.GetVariable("DBMOD")),bool(raw.doc.Saved),str(raw.doc.ActiveLayout.Name))
         checked = cad.validate_sheet_layout(**params)
         assert checked["verified"],checked
+        assert state_before == (int(raw.doc.GetVariable("DBMOD")),bool(raw.doc.Saved),str(raw.doc.ActiveLayout.Name))
         exported = cad.publish_layout_pdf("TEST-A2","layout-proof.pdf")
         pdf = Path(exported["path"])
         assert pdf.read_bytes().startswith(b"%PDF-")

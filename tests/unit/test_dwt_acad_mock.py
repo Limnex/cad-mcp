@@ -692,7 +692,7 @@ def test_acad_page_setup_non_layout_still_writes_center_plot(monkeypatch, tmp_pa
 
 
 def test_block_attribute_field_stores_object_field_not_static_text(monkeypatch, tmp_path):
-    attribute = SimpleNamespace(TagString="X", TextString="0")
+    attribute = SimpleNamespace(TagString="X", TextString="0", Handle="B")
     attribute.Update = lambda: None
     block = SimpleNamespace(
         EntityName="AcDbBlockReference", HasAttributes=True,
@@ -700,7 +700,7 @@ def test_block_attribute_field_stores_object_field_not_static_text(monkeypatch, 
     )
     source = SimpleNamespace(
         EntityName="AcDbBlockReference", InsertionPoint=(1000, 2000, 0),
-        ObjectID=42,
+        ObjectID=42, Handle="A",
     )
     variables = {"FIELDEVAL": 0}
 
@@ -724,6 +724,9 @@ def test_block_attribute_field_stores_object_field_not_static_text(monkeypatch, 
     backend.msp = SimpleNamespace()
     monkeypatch.setattr(backend, "_ensure_connected", lambda: None)
 
+    from cad_mcp.drawing import native_fields
+    monkeypatch.setattr(native_fields,"read_attribute_field",lambda *args:{
+        "code":attribute.TextString,"references":["A"]})
     result = backend.bind_block_attribute_field(
         block_handle="1",
         attribute_tag="X",
@@ -851,7 +854,8 @@ def test_mocked_cross_database_block_import_hash_and_unit_checks(monkeypatch, tm
             assert name == "INSUNITS"
             return 4
 
-        def CopyObjects(self, objects, owner):
+        def CopyObjects(self, objects, owner, id_pairs):
+            assert id_pairs.varianttype == cad_dwt_acad.pythoncom.VT_BYREF | cad_dwt_acad.pythoncom.VT_VARIANT
             owner.items.extend(objects)
 
     class TargetDocument:

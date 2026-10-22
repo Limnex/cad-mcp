@@ -106,6 +106,7 @@ class PaperBlock(Collection):
 class Plot:
     def __init__(self,name):
         self.Name = name
+        self.ModelType = False
         self.ConfigName,self.CanonicalMediaName = "PDF.pc3","A2"
         self.PlotRotation,self.PaperUnits,self.PlotType = 0,1,5
         self.StyleSheet,self.CenterPlot = "mono.ctb",False
@@ -220,7 +221,11 @@ def workflow(tmp_path,monkeypatch):
         vp = backend.doc.ActivePViewport
         vp.view_center = [center[0]-vp.Target[0],center[1]-vp.Target[1]]
         vp.view_height = height
-    backend.acad = SimpleNamespace(ZoomCenter=zoom,ZoomWindow=lambda *args:None,ActiveDocument=backend.doc)
+    def database(progid):
+        assert progid == "ObjectDBX.AxDbDocument.25"
+        return SimpleNamespace(PlotConfigurations=SimpleNamespace(Add=lambda name, model: Plot(name)))
+    backend.acad = SimpleNamespace(ZoomCenter=zoom,ZoomWindow=lambda *args:None,ActiveDocument=backend.doc,
+                                   Version="25.1",GetInterfaceObject=database)
     backend.doc.application = backend.acad
     source = tmp_path/"frame.dwg"
     source.write_bytes(b"template fixture")
@@ -319,7 +324,8 @@ def test_bad_paper_readback_stops_before_inserting_frame(workflow,monkeypatch):
     original = Plot.CopyFrom
     def bad_copy(layout,source):
         original(layout,source)
-        layout.size = (420,297)
+        if layout.Name != "CAD_MCP_RESOURCE_PROBE":
+            layout.size = (420,297)
     monkeypatch.setattr(Plot,"CopyFrom",bad_copy)
     with pytest.raises(RuntimeError,match="实际纸张"):
         backend.apply_sheet_layout(**params,confirmation_token=preview["confirmation_token"])
@@ -365,10 +371,10 @@ def test_plot_probe_uses_byref_for_dynamic_com_wrappers(workflow):
     assert geometry["margins_mm"] == [1,2,3,4]
 
 
-def test_missing_paper_evidence_does_not_create_or_change_layout(workflow):
+def test_missing_paper_evidence_does_not_create_or_change_layout(workflow,monkeypatch):
     backend,params = workflow
     setup = backend.doc.PlotConfigurations.Item("PDF-A2")
-    setup.GetPaperMargins = lambda:None
+    monkeypatch.setattr(Plot, "GetPaperMargins", lambda self:None)
     with pytest.raises(RuntimeError,match="GetPaperMargins"):
         backend.preview_sheet_layout(**params)
     assert backend.doc.Layouts.Count == 1
@@ -526,19 +532,18 @@ def test_full_apply_restores_original_active_document(workflow):
 def test_saved_page_setup_refreshes_empty_runtime_media_cache(workflow):
     backend,params = workflow
     setup=backend.doc.PlotConfigurations.Item("PDF-A2")
-    setup.ready=False
-    setup.GetCanonicalMediaNames=lambda:["A2"] if setup.ready else []
-    setup.RefreshPlotDeviceInfo=lambda:setattr(setup,"ready",True)
+    setup.GetCanonicalMediaNames=lambda:[]
+    setup.RefreshPlotDeviceInfo=lambda:pytest.fail("must not refresh the live drawing")
     assert backend.preview_sheet_layout(**params)["confirmation_token"]
     assert backend.doc.mutations == []
     assert backend.doc.GetVariable("DBMOD") == 0
 
 
-def test_resource_refresh_cannot_silently_change_stored_page_settings(workflow):
+def test_resource_refresh_cannot_silently_change_stored_page_settings(workflow,monkeypatch):
     backend,params = workflow
     setup=backend.doc.PlotConfigurations.Item("PDF-A2")
-    setup.RefreshPlotDeviceInfo=lambda:setattr(setup,"CanonicalMediaName","A3")
-    with pytest.raises(Exception,match="状态发生变化"):
+    monkeypatch.setattr(Plot,"RefreshPlotDeviceInfo",lambda probe:setattr(probe,"CanonicalMediaName","A3"))
+    with pytest.raises(Exception,match="不一致"):
         backend.preview_sheet_layout(**params)
     assert backend.doc.Layouts.Count == 1
 
@@ -681,3 +686,33 @@ def test_preset_existing_identity_or_layer_lock_blocks_adoption(workflow,monkeyp
     preview = backend.preview_sheet_layout(**params)
     assert any("已锁定" in c for c in preview["plan"]["conflicts"])
     assert layout.Block.Count == 2
+
+
+
+def test_viewport_display_number_and_float_noise_do_not_change_identity(workflow):
+    backend, params = workflow
+    apply(backend, params)
+    layout = backend.doc.Layouts.Item("A2-L")
+    viewport = next(e for e in layout.Block.values if e.ObjectName == "AcDbViewport" and e.number > 1)
+    viewport.number = 19
+    viewport.Width -= 1e-12
+    assert backend.validate_sheet_layout(**params)["verified"]
+    viewport.Width -= 0.1
+    assert not backend.validate_sheet_layout(**params)["verified"]
+
+
+def test_legacy_viewport_number_compatibility_keeps_geometry_protection(workflow):
+    backend, params = workflow
+    apply(backend, params)
+    layout = backend.doc.Layouts.Item("A2-L")
+    viewport = next(e for e in layout.Block.values if e.ObjectName == "AcDbViewport" and e.number > 1)
+    native = {viewport.Handle:viewport.native()}
+    state = backend._layout_entity_state(viewport,native)
+    legacy = {**state,"viewport":dict(native[viewport.Handle])}
+    legacy["viewport"]["number"] += 1
+    from cad_mcp.engineering.layouts import fingerprint
+    owner = {"state_hash":fingerprint(legacy)}
+    assert backend._layout_state_matches(state,native,owner)
+    native[viewport.Handle]["view_height"] += 1
+    changed = backend._layout_entity_state(viewport,native)
+    assert not backend._layout_state_matches(changed,native,owner)

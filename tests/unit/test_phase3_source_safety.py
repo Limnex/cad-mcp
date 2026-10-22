@@ -175,6 +175,12 @@ class _FakeLayout:
         self.UseStandardScale = False
         self.StandardScale = 3
 
+    def GetWindowToPlot(self):
+        return getattr(self,"window",((1,2),(3,4)))
+
+    def SetWindowToPlot(self, lower, upper):
+        self.window = (tuple(lower.value),tuple(upper.value))
+
     def GetPlotDeviceNames(self):
         return ("DWG To PDF.pc3", "Original.pc3")
 
@@ -197,10 +203,13 @@ def _pdf_backend(tmp_path, should_succeed=True):
     previous = _FakeLayout("Previous")
     plot = _FakePlot(should_succeed)
     backend.doc = SimpleNamespace(
+        Name="test.dwg", FullName="C:/test.dwg", Regen=lambda mode: None,
         Plot=plot,
         ActiveLayout=previous,
-        Layouts=SimpleNamespace(Item=lambda name: model if name == "Model" else None),
+        Layouts=SimpleNamespace(Item=lambda name: model if name == "Model" else previous),
     )
+    backend.acad = SimpleNamespace(ActiveDocument=backend.doc)
+    backend._model_plot_window = lambda:([0,0],[420,297])
     return backend, model, previous, plot
 
 
@@ -328,3 +337,28 @@ def test_pdf_interrupt_is_reraised_after_restoring_settings(monkeypatch, tmp_pat
         backend._plot_to_pdf(tmp_path / "interrupted.pdf")
     assert model.ConfigName == "Original.pc3"
     assert model.PlotType == 7
+
+
+
+@pytest.mark.parametrize("success", [True, False])
+def test_pdf_activates_bound_document_and_restores_previous_document(tmp_path, monkeypatch, success):
+    monkeypatch.setattr(cad_acad.time, "sleep", lambda seconds: None)
+    backend, model, previous, plot = _pdf_backend(tmp_path, should_succeed=success)
+    other = SimpleNamespace(Name="other.dwg", FullName="C:/other.dwg")
+    other.Activate = lambda: setattr(backend.acad,"ActiveDocument",other)
+    backend.doc.Activate = lambda: setattr(backend.acad,"ActiveDocument",backend.doc)
+    backend._wait_acad_ready = lambda app: None
+    backend.acad.ActiveDocument = other
+    original_plot = plot.PlotToFile
+    def checked_plot(*args):
+        assert backend.acad.ActiveDocument is backend.doc
+        return original_plot(*args)
+    plot.PlotToFile = checked_plot
+    if success:
+        backend._plot_to_pdf(tmp_path/"active.pdf")
+    else:
+        with pytest.raises(RuntimeError,match="拒绝"):
+            backend._plot_to_pdf(tmp_path/"active.pdf")
+    assert backend.acad.ActiveDocument is other
+    assert backend.doc.ActiveLayout is previous
+    assert model.GetWindowToPlot() == ((1,2),(3,4))

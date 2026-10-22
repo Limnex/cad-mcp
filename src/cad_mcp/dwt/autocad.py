@@ -79,7 +79,10 @@ def _pt(x: float, y: float, z: float = 0.0):
 
 
 def _dispatch_array(objects: Iterable[Any]):
+    # A block Dispatch is also a Python sequence. Passing that wrapper lets
+    # pywin32 infer a nested SAFEARRAY; raw IDispatch pointers stay one-dimensional.
     native = [getattr(item, "_obj", item) for item in objects]
+    native = [getattr(item, "_oleobj_", item) for item in native]
     return win32com.client.VARIANT(
         pythoncom.VT_ARRAY | pythoncom.VT_DISPATCH, native
     )
@@ -1152,10 +1155,17 @@ class AcadDwtMixin:
             except Exception as exc:
                 raise RuntimeError("无法启用 REGEN 字段更新位 FIELDEVAL=16") from exc
         self.doc.Regen(1)
-        stored = str(attribute.TextString)
-        # ActiveX may expose the evaluated text instead of the field code.  In that case
-        # the write cannot be proven and must fail so the outer undo group rolls back.
-        if "%<" not in stored or "\\AcObjProp" not in stored:
+        # TextString can be evaluated text or an unmaterialized literal expression;
+        # neither proves the association. Always read the native FIELD and pointers.
+        from cad_mcp.drawing.native_fields import read_attribute_field
+        native = read_attribute_field(self, attribute)
+        verified = ("\\AcObjProp" in native["code"]
+                    and f".{property_name} " in native["code"]
+                    and all(part in native["code"] for part in format_parts)
+                    and (not prefix or prefix in native["code"])
+                    and (not suffix or suffix in native["code"])
+                    and {str(source.Handle).upper()} == set(native["references"]))
+        if not verified:
             raise UnsupportedOperationError(
                 "AutoCAD 未能从 AttributeReference 读回关联字段代码；已停止并回滚，未用静态文字替代",
                 details={"attribute_tag": attribute_tag, "source_handle": source_handle},
@@ -1187,6 +1197,8 @@ class AcadDwtMixin:
             except Exception:
                 continue
         if document is None:
+            from cad_mcp.drawing.document_guard import assert_safe_document_open
+            assert_safe_document_open(acad)
             document = acad.Documents.Open(str(source), True)
             opened_here = True
         return document, opened_here, previous
@@ -1407,7 +1419,9 @@ class AcadDwtMixin:
                         )
                     self.doc.Blocks.Item(requested).Delete()
                 source_block = document.Blocks.Item(source_name)
-                document.CopyObjects(_dispatch_array([source_block]), self.doc.Blocks)
+                # Supply the optional IDPairs as an empty in/out VARIANT.
+                id_pairs = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_VARIANT, None)
+                document.CopyObjects(_dispatch_array([source_block]), self.doc.Blocks, id_pairs)
                 if not self._block_exists(requested):
                     raise RuntimeError(f"块定义 {requested} 复制后未在目标图纸中出现")
                 imported.append(requested)

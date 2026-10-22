@@ -658,3 +658,23 @@ def test_semantic_query_waits_for_another_client_to_finish(strict, monkeypatch):
         reader.join(timeout=2)
     assert not reader.is_alive()
     assert read.is_set() and results[0]["ok"]
+
+
+
+def test_template_anchor_text_is_bound_during_strict_creation(strict, monkeypatch):
+    register()
+    paper = strict.doc.layouts.new("TEST-PAPER")
+    def fill(*args):
+        entity = paper.add_text("实机字段填写")
+        return {"handles": [strict._handle_str(entity.dxf.handle)]}
+    monkeypatch.setattr(strict, "fill_template_fields", fill, raising=False)
+    params = dict(template_id="test", sheet_id="A2", layout_name="TEST-PAPER", values={"title":"实机字段填写"})
+    rejected = json.loads(server.cad_fill_template_fields(server.FillTemplateFieldsInput(**params)))
+    assert rejected["error_detail"]["code"] == "SEMANTIC_REQUIRED"
+    assert len(paper) == 0
+    accepted = json.loads(server.cad_fill_template_fields(server.FillTemplateFieldsInput(**params, semantic=binding(role="图框标题"))))
+    assert accepted["ok"], accepted
+    entity = strict.doc.entitydb[format(int(accepted["handles"][0]), "X")]
+    from cad_mcp.core.semantics import entity_metadata
+    metadata = entity_metadata(strict, entity)
+    assert metadata["project_id"] == "P1" and metadata["role"] == "图框标题"

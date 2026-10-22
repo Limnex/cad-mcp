@@ -800,6 +800,8 @@ class AcadBackend(AcadLayoutMixin, AcadDwtMixin):
         acad = self._connect()
         self._wait_acad_ready(acad)
         template, template_source = self._resolve_new_drawing_template(acad, template_path)
+        from cad_mcp.drawing.document_guard import assert_safe_document_open
+        assert_safe_document_open(acad)
         self._own_document = False
         doc = None
         add_error = None
@@ -868,6 +870,8 @@ class AcadBackend(AcadLayoutMixin, AcadDwtMixin):
         opened_here = False
         if doc is None:
             self._assert_no_external_lock(path)
+            from cad_mcp.drawing.document_guard import assert_safe_document_open
+            assert_safe_document_open(acad)
             doc = acad.Documents.Open(str(path))
             opened_here = True
         if bool(_safe_get(doc, "ReadOnly", False)):
@@ -979,6 +983,8 @@ class AcadBackend(AcadLayoutMixin, AcadDwtMixin):
             acad = self._connect()
             if self._find_open_document(acad, output) is not None:
                 raise PermissionError(f"工作副本目标已在 AutoCAD 中打开，未接管: {output}")
+            from cad_mcp.drawing.document_guard import assert_safe_document_open
+            assert_safe_document_open(acad)
             opened_doc = acad.Documents.Open(str(output))
             self._use_doc(opened_doc, expected_path=output)
             self.current_path = output
@@ -1043,6 +1049,8 @@ class AcadBackend(AcadLayoutMixin, AcadDwtMixin):
             except Exception:
                 continue
         if template_doc is None:
+            from cad_mcp.drawing.document_guard import assert_safe_document_open
+            assert_safe_document_open(acad)
             template_doc = acad.Documents.Open(str(source), True)
             opened_here = True
         try:
@@ -2557,19 +2565,30 @@ class AcadBackend(AcadLayoutMixin, AcadDwtMixin):
         self._add_lwpolyline([(0, 0), (width, 0), (width, height), (0, height)], 50)
         m, b = 10.0, 25.0
         self._add_lwpolyline([(b, m), (width - m, m), (width - m, height - m), (b, height - m)], 25)
-        tb_w, tb_h = 180.0, 56.0
-        x0, y0 = width - tb_w, 0.0
-        self._add_lwpolyline([(x0, y0), (width, y0), (width, y0 + tb_h), (x0, y0 + tb_h)], 50)
-        col = tb_w - 40.0
-        self._add_line(x0 + col, y0, x0 + col, y0 + tb_h)
-        self._add_line(x0, y0 + tb_h * 0.55, width, y0 + tb_h * 0.55)
-        self._add_line(x0, y0 + tb_h * 0.27, width, y0 + tb_h * 0.27)
-        self._add_text(title, x0 + 5, y0 + tb_h - 16, 12)
-        self._add_text(f"工程:{project}" if project else "", x0 + 5, y0 + tb_h * 0.55 + 4, 7)
-        self._add_text(f"设计:{design}  审核:{check}", x0 + 5, y0 + tb_h * 0.27 + 4, 7)
-        self._add_text(f"图号 {sheet_no}", x0 + col + 4, y0 + tb_h - 16, 7)
-        self._add_text(f"比例 {ratio}", x0 + col + 4, y0 + tb_h * 0.55 + 4, 7)
-        self._add_text("日期 2026-08-12", x0 + col + 4, y0 + tb_h * 0.27 + 4, 7)
+        from cad_mcp.drawing.title_block import title_block_cells
+        bounds, split, rows, cells = title_block_cells(
+            width, title=title, project=project, design=design, check=check,
+            sheet_no=sheet_no, ratio=ratio)
+        left, bottom, right, top = bounds
+        self._add_lwpolyline([(left, bottom), (right, bottom), (right, top), (left, top)], 50)
+        self._add_line(split, bottom, split, top)
+        for row in rows:
+            self._add_line(left, row, right, row)
+        for text, cell, text_height in cells:
+            entity = self._add_text(text, cell[0], cell[1], text_height)
+            if entity is None:
+                continue
+            low, high = bounding_box(entity)
+            factor = min(1.0, (cell[2] - cell[0]) / max(high[0] - low[0], 1e-9),
+                         (cell[3] - cell[1]) / max(high[1] - low[1], 1e-9))
+            if factor < 1:
+                entity.Height = float(entity.Height) * factor
+                entity.Update()
+                low, high = bounding_box(entity)
+            entity.Move(_pt(*low), _pt(cell[0], (cell[1] + cell[3] - high[1] + low[1]) / 2, low[2]))
+            low, high = bounding_box(entity)
+            if low[0] < cell[0] - 0.01 or low[1] < cell[1] - 0.01 or high[0] > cell[2] + 0.01 or high[1] > cell[3] + 0.01:
+                raise RuntimeError("标题栏文字无法放入目标单元格，已停止并回滚")
         return f"已画图框 {width}×{height} + 右下角标题栏 180×56（图名:{title or '未填'}）"
 
     def draw_table(self, origin_x: float, origin_y: float,
@@ -3003,11 +3022,33 @@ class AcadBackend(AcadLayoutMixin, AcadDwtMixin):
         """打印到同目录唯一临时文件，确认完整后再无覆盖地发布。"""
         plot = self.doc.Plot
         temp_path = self._temporary_pdf_path(path)
-        previous_layout = self.doc.ActiveLayout
+        previous_document = self.acad.ActiveDocument
+        identity = lambda doc: (str(doc.FullName).casefold(), str(doc.Name).casefold())
+        changed_document = identity(previous_document) != identity(self.doc)
+        previous_layout_name = None
+        model_window = None
         previous_quiet = plot.QuietErrorMode
         error: Optional[BaseException] = None
         try:
+            if changed_document:
+                self.doc.Activate()
+                self._wait_acad_ready(self.acad)
+            if identity(self.acad.ActiveDocument) != identity(self.doc):
+                raise RuntimeError("无法激活绑定图纸进行 PDF 打印")
+            previous_layout_name = str(self.doc.ActiveLayout.Name)
             self._activate_layout(layout)
+            if str(layout.Name).casefold() == "model" and int(layout.PlotType) == 1:
+                model_window = out_pair(layout, "GetWindowToPlot")
+                lower, upper = self._model_plot_window()
+                # EXTMIN/EXTMAX can retain deleted template geometry even after
+                # REGEN/ZOOM. Plot the independently measured DCS bounds instead.
+                layout.SetWindowToPlot(_pt2(lower), _pt2(upper))
+                actual_window = out_pair(layout, "GetWindowToPlot")
+                if any(len(a) != len(b) or any(not math.isclose(x,y,rel_tol=1e-10,abs_tol=1e-7)
+                        for x,y in zip(a,b)) for a,b in zip(actual_window,(lower,upper))):
+                    raise RuntimeError("实际模型打印窗口回读不一致")
+                layout.PlotType = 4
+            self.doc.Regen(1)
             plot.QuietErrorMode = True
             result = plot.PlotToFile(str(temp_path), device)
             if result is False:
@@ -3022,9 +3063,26 @@ class AcadBackend(AcadLayoutMixin, AcadDwtMixin):
         except Exception as exc:
             restore_errors.append(f"QuietErrorMode: {exc}")
         try:
-            self._activate_layout(previous_layout)
+            if model_window is not None:
+                current_model = self.doc.Layouts.Item("Model")
+                current_model.SetWindowToPlot(_pt2(model_window[0]), _pt2(model_window[1]))
+                current_model.PlotType = 1
+                restored = out_pair(current_model, "GetWindowToPlot")
+                if any(len(a) != len(b) or any(not math.isclose(x,y,rel_tol=1e-10,abs_tol=1e-7)
+                        for x,y in zip(a,b)) for a,b in zip(restored,model_window)):
+                    raise RuntimeError("原模型打印窗口恢复回读不一致")
+            if previous_layout_name is not None:
+                self._activate_layout(self.doc.Layouts.Item(previous_layout_name))
         except Exception as exc:
             restore_errors.append(f"活动布局: {exc}")
+        if changed_document:
+            try:
+                previous_document.Activate()
+                self._wait_acad_ready(self.acad)
+                if identity(self.acad.ActiveDocument) != identity(previous_document):
+                    raise RuntimeError("原活动图纸读回不一致")
+            except Exception as exc:
+                restore_errors.append(f"活动图纸: {exc}")
         if error is not None and not isinstance(error, Exception):
             self._discard_temporary_pdf(temp_path)
             if restore_errors and hasattr(error, "add_note"):
@@ -3037,10 +3095,32 @@ class AcadBackend(AcadLayoutMixin, AcadDwtMixin):
                 details += f"；恢复 AutoCAD 状态失败: {'; '.join(restore_errors)}"
             raise RuntimeError(details) from error
         try:
+            from cad_mcp.drawing.pdf_output import repair_autocad_metadata
+            repair_autocad_metadata(temp_path)
             temp_path.rename(path)
         except Exception:
             self._discard_temporary_pdf(temp_path)
             raise
+
+    @_bounded_com_scan
+    def _model_plot_window(self):
+        count = int(self.msp.Count)
+        if not 0 < count <= MAX_DRAWING_SCAN_ENTITIES:
+            raise ValueError("模型空间为空或超过完整扫描上限，未导出 PDF")
+        boxes = []
+        for index in range(count):
+            self._scan_checkpoint(index)
+            boxes.append(bounding_box(self.msp.Item(index)))
+        low = [min(pair[0][axis] for pair in boxes) for axis in range(3)]
+        high = [max(pair[1][axis] for pair in boxes) for axis in range(3)]
+        points = [self.doc.Utility.TranslateCoordinates(_pt(x,y,z), 0, 2, False)
+                  for x in (low[0], high[0]) for y in (low[1], high[1]) for z in (low[2], high[2])]
+        lower = [min(float(p[axis]) for p in points) for axis in range(2)]
+        upper = [max(float(p[axis]) for p in points) for axis in range(2)]
+        if not all(math.isfinite(v) for v in (*lower,*upper)):
+            raise RuntimeError("实际模型打印窗口无法完整回读")
+        margin = max(0.001, max(upper[0]-lower[0],upper[1]-lower[1])*0.005)
+        return [v-margin for v in lower], [v+margin for v in upper]
 
     def _plot_to_pdf(self, path: Path) -> None:
         """事务化导出模型空间：配置可恢复、临时文件完整、目标不覆盖。"""

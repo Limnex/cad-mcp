@@ -3047,7 +3047,7 @@ def cad_insert_template_sheet(params: InsertTemplateSheetInput) -> str:
         return _fail(e)
 
 
-class FillTemplateFieldsInput(ToolInput):
+class FillTemplateFieldsInput(SemanticToolInput):
     model_config = ConfigDict(str_strip_whitespace=True)
     template_id: str
     sheet_id: str

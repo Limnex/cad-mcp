@@ -117,6 +117,8 @@ def test_acad_open_drawing_accepts_writable_document(tmp_path, monkeypatch, abso
             self.ModelSpace = ModelSpace()
 
     class Documents:
+        Count = 0
+
         def Open(self, path):
             assert path == str(target.resolve())
             return document
@@ -161,6 +163,8 @@ def test_acad_open_drawing_rejects_readonly_document_and_closes_it(
             self.close_calls.append(save)
 
     class Documents:
+        Count = 0
+
         def Open(self, path):
             assert path == str(target.resolve())
             return document

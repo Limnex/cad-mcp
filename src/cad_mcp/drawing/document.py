@@ -1490,19 +1490,26 @@ class CadDocument(DxfDwtMixin):
         self._add_lwpolyline([(0, 0), (width, 0), (width, height), (0, height)], layer, lw=50)
         m, b = 10.0, 25.0
         self._add_lwpolyline([(b, m), (width - m, m), (width - m, height - m), (b, height - m)], layer, lw=25)
-        tb_w, tb_h = 180.0, 56.0
-        x0, y0 = width - tb_w, 0.0
-        self._add_lwpolyline([(x0, y0), (width, y0), (width, y0 + tb_h), (x0, y0 + tb_h)], layer, lw=50)
-        col = tb_w - 40.0   # 右列 40mm
-        self._add_line(x0 + col, y0, x0 + col, y0 + tb_h, layer)
-        self._add_line(x0, y0 + tb_h * 0.55, width, y0 + tb_h * 0.55, layer)
-        self._add_line(x0, y0 + tb_h * 0.27, width, y0 + tb_h * 0.27, layer)
-        self._add_text(title, x0 + 5, y0 + tb_h - 16, 12, layer)
-        self._add_text(f"工程:{project}" if project else "", x0 + 5, y0 + tb_h * 0.55 + 4, 7, layer)
-        self._add_text(f"设计:{design}  审核:{check}", x0 + 5, y0 + tb_h * 0.27 + 4, 7, layer)
-        self._add_text(f"图号 {sheet_no}", x0 + col + 4, y0 + tb_h - 16, 7, layer)
-        self._add_text(f"比例 {ratio}", x0 + col + 4, y0 + tb_h * 0.55 + 4, 7, layer)
-        self._add_text("日期 2026-08-12", x0 + col + 4, y0 + tb_h * 0.27 + 4, 7, layer)
+        from cad_mcp.drawing.title_block import title_block_cells
+        bounds, split, rows, cells = title_block_cells(
+            width, title=title, project=project, design=design, check=check,
+            sheet_no=sheet_no, ratio=ratio)
+        left, bottom, right, top = bounds
+        self._add_lwpolyline([(left, bottom), (right, bottom), (right, top), (left, top)], layer, lw=50)
+        self._add_line(split, bottom, split, top, layer)
+        for row in rows:
+            self._add_line(left, row, right, row, layer)
+        for text, cell, text_height in cells:
+            entity = self._add_text(text, cell[0], cell[1], text_height, layer)
+            if entity is None:
+                continue
+            extent = bbox.extents([entity])
+            factor = min(1.0, (cell[2] - cell[0]) / max(extent.size.x, 1e-9),
+                         (cell[3] - cell[1]) / max(extent.size.y, 1e-9))
+            entity.dxf.height *= factor
+            extent = bbox.extents([entity])
+            entity.translate(cell[0] - extent.extmin.x,
+                             (cell[1] + cell[3] - extent.size.y) / 2 - extent.extmin.y, 0)
         return f"已画图框 {width}×{height} + 右下角标题栏 180×56（图名:{title or '未填'}）"
 
     def draw_table(self, origin_x: float, origin_y: float,

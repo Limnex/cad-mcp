@@ -317,11 +317,11 @@ CREATE_TOOLS = {
     "cad_copy_entity", "cad_mirror_entity", "cad_make_block", "cad_insert_block",
     "cad_draw_title_block", "cad_array_rect", "cad_array_polar", "cad_draw_centerline",
     "cad_offset", "cad_copy_linear", "cad_draw_table", "cad_insert_template_sheet",
-    "cad_create_viewport", "cad_draw_mtext", "cad_insert_coordinate_label",
+    "cad_create_viewport", "cad_fill_template_fields", "cad_draw_mtext", "cad_insert_coordinate_label",
     "cad_insert_elevation_label", "cad_create_layout", "cad_apply_dwt_profile", "cad_apply_sheet_layout",
 }
 EDIT_TOOLS = {"cad_edit_entity_properties", "cad_delete_entity", "cad_move_entity",
-              "cad_rotate_entity", "cad_fill_template_fields", "cad_set_block_attributes",
+              "cad_rotate_entity", "cad_set_block_attributes",
               "cad_bind_block_attribute_field"}
 SPECIAL_TOOLS = {"cad_apply_environment_drawing", "cad_register_semantic_object"}
 NON_GEOMETRY_TOOLS = {

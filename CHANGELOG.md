@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Fix live-validation failures: probe plot resources in a detached ObjectDBX database, stabilize floating-viewport ownership across DWG reopen, guard untouched unsaved startup drawings, marshal block arrays as raw IDispatch pointers, verify native attribute FIELD dictionaries and source references, and require semantic bindings for template anchor text.
+- Fit legacy title-block text to separate cells inside the inner frame and use the current date in both backends. Export model PDFs from independently measured display-coordinate bounds with verified window restoration; restore the active document/layout after plotting. Repair the identified AutoCAD metadata-stream defect with an incremental metadata-only replacement that preserves page bytes.
+
 - Add `cad_fillet` for native AutoCAD FILLET on entity pairs and lightweight polylines. Default to read-only preflight; verify actual geometry and radius, restore command settings and temporary views, and report rollback state without saving. Report actual rounded corners when short edges are skipped.
 - Add `cad_draw_diameter_dimension` for native DXF/AutoCAD diameter dimensions from a center and a point on the circle, with optional text position and the current dimension style. Return the geometric diameter; do not imply an update association with an existing circle.
 - Extend `cad_draw_hatch` with predefined patterns, scale/angle, default dry-run, and exact composite regions from LINE, ARC, CIRCLE and planar polylines, including enclosed holes. Preserve circular arcs and source entities, reject invalid/open arrangements without gap repair, and require non-associative composite fills with post-write verification and temporary-boundary cleanup.

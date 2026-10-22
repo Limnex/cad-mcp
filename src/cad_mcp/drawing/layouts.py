@@ -259,19 +259,46 @@ class AcadLayoutMixin:
             raise ValueError("目标布局页面设置回读不完整")
         return {"plot":payload,"origin":list(layout.PlotOrigin),"paper":self._sheet_plot_geometry(layout)}
 
-    def _refresh_sheet_plot_resources(self, setup):
-        # Saved page setups can have an empty runtime media cache immediately
-        # after opening a DWG. Refresh device information without changing any
-        # setting, and prove the database/settings stayed unchanged.
-        before,missing = self._plot_payload(setup)
+    def _refresh_sheet_plot_resources(self, setup, rotation=None):
+        # Refresh only a detached ObjectDBX database. RefreshPlotDeviceInfo can
+        # dirty a reopened DWG even when every visible plot setting is unchanged.
+        before, missing = self._plot_payload(setup)
         if missing:
             raise ValueError("命名页面设置回读不完整")
         origin = list(setup.PlotOrigin)
         dbmod = int(self.doc.GetVariable("DBMOD"))
-        setup.RefreshPlotDeviceInfo()
-        after,missing = self._plot_payload(setup)
-        if missing or before != after or origin != list(setup.PlotOrigin) or dbmod != int(self.doc.GetVariable("DBMOD")):
-            raise ConflictError("打印资源刷新时页面设置或图纸状态发生变化，不能报告只读预览成功")
+        version = int(str(self.acad.Version).split(".")[0])
+        database = self.acad.GetInterfaceObject(f"ObjectDBX.AxDbDocument.{version}")
+        probe = database.PlotConfigurations.Add("CAD_MCP_RESOURCE_PROBE", bool(setup.ModelType))
+        try:
+            probe.CopyFrom(setup)
+            probe.RefreshPlotDeviceInfo()
+            actual, missing = self._plot_payload(probe)
+            differences = {key: {"expected": value, "actual": actual.get(key)}
+                           for key, value in before.items() if actual.get(key) != value}
+            if missing or differences or list(probe.PlotOrigin) != origin:
+                raise ConflictError("独立打印资源探针与命名页面设置不一致", details={
+                    "differences": differences, "unverified_fields": missing,
+                    "origin_before": origin, "origin_probe": list(probe.PlotOrigin)})
+            resources = {
+                "devices": list(probe.GetPlotDeviceNames()),
+                "media": list(probe.GetCanonicalMediaNames()),
+                "styles": list(probe.GetPlotStyleTableNames()),
+                "paper": self._sheet_plot_geometry(probe, rotation),
+            }
+        finally:
+            del probe
+            del database
+        after, missing = self._plot_payload(setup)
+        differences = {key: {"before": value, "after": after.get(key)}
+                       for key, value in before.items() if after.get(key) != value}
+        after_origin, after_dbmod = list(setup.PlotOrigin), int(self.doc.GetVariable("DBMOD"))
+        if missing or differences or origin != after_origin or dbmod != after_dbmod:
+            raise ConflictError("打印资源刷新时页面设置或图纸状态发生变化，不能报告只读预览成功", details={
+                "differences": differences, "unverified_fields": missing,
+                "origin_before": origin, "origin_after": after_origin,
+                "dbmod_before": dbmod, "dbmod_after": after_dbmod})
+        return resources
 
     def _layout_owner(self, entity):
         # Missing XData returns an empty array. COM read errors must propagate;
@@ -299,6 +326,16 @@ class AcadLayoutMixin:
             state["viewport"] = dict(native[str(entity.Handle).upper()])
             # DXF 68 may change from 1 to -1 merely by switching layout tabs.
             state["viewport"]["status"] = int(state["viewport"]["status"] != 0)
+            # Floating viewport display IDs are renumbered on DWG reopen.
+            if state["viewport"]["number"] > 1:
+                state["viewport"]["number"] = 2
+            # DWG round-trips perturb binary doubles by a few ULPs. Quantize
+            # only viewport numeric readback, far below the paper-fit tolerance.
+            for key, value in state["viewport"].items():
+                if isinstance(value, float):
+                    state["viewport"][key] = round(value, 9)
+                elif isinstance(value, list):
+                    state["viewport"][key] = [round(v, 9) if isinstance(v, float) else v for v in value]
         else:
             low, high = bounding_box(entity)
             state["bounds"] = [*map(float, low),*map(float, high)]
@@ -313,6 +350,23 @@ class AcadLayoutMixin:
                     "point":list(att.InsertionPoint),"height":float(att.Height),"rotation":float(att.Rotation)}
                     for att in entity.GetAttributes()]
         return state
+
+    @staticmethod
+    def _layout_state_matches(state, native, owner):
+        if owner.get("state_version") == 2 or state["kind"] != "AcDbViewport":
+            return owner.get("state_hash") == fingerprint(state)
+        # Legacy metadata included a transient viewport number. Reconstruct only
+        # the original snapshot, preserving every geometry/flag value exactly.
+        # A newly created viewport followed a deleted default viewport (ID 2),
+        # so its pre-save ID can be one larger than the compacted ID on reopen.
+        legacy = {**state, "viewport": dict(native[state["handle"]])}
+        legacy["viewport"]["status"] = int(legacy["viewport"]["status"] != 0)
+        number = int(legacy["viewport"]["number"])
+        for candidate in (number, number + 1):
+            legacy["viewport"]["number"] = candidate
+            if owner.get("state_hash") == fingerprint(legacy):
+                return True
+        return False
 
     def _block_dependency_state(self, block_name):
         states, seen, count = [], set(), 0
@@ -446,19 +500,19 @@ class AcadLayoutMixin:
         setup = setups.get(request.page_setup_name.casefold())
         if setup is None:
             raise ValueError("命名页面设置不存在；请先配置实际打印设备、纸张，再预览布局")
-        self._refresh_sheet_plot_resources(setup)
+        resources = self._refresh_sheet_plot_resources(setup, request.rotation)
         plot, unverified = self._plot_payload(setup)
         if unverified:
             raise ValueError("命名页面设置回读不完整: "+", ".join(unverified))
-        paper = self._sheet_plot_geometry(setup, request.rotation)
+        paper = resources["paper"]
         if not str(setup.ConfigName).strip() or str(setup.ConfigName).casefold() == "none":
             raise ValueError("命名页面设置未配置实际打印设备")
-        if str(setup.ConfigName).casefold() not in {str(n).casefold() for n in setup.GetPlotDeviceNames()}:
+        if str(setup.ConfigName).casefold() not in {str(n).casefold() for n in resources["devices"]}:
             raise ValueError("命名页面设置所选打印设备在本机不可用")
-        if str(setup.CanonicalMediaName) not in list(setup.GetCanonicalMediaNames()):
+        if str(setup.CanonicalMediaName) not in resources["media"]:
             raise ValueError("命名页面设置所选纸张在当前设备不可用")
         if str(setup.StyleSheet).strip() and str(setup.StyleSheet).casefold() not in {
-                str(n).casefold() for n in setup.GetPlotStyleTableNames()}:
+                str(n).casefold() for n in resources["styles"]}:
             raise ValueError("命名页面设置所选打印样式在本机不可用")
         block = self.doc.Blocks.Item(sheet.block_name)
         block_origin = list(map(float, block.Origin))
@@ -505,7 +559,7 @@ class AcadLayoutMixin:
                     conflicts.append("受管对象角色与真实图元类型不符")
                 if role == "frame" and state.get("name") != sheet.block_name:
                     conflicts.append("受管图框与目标模板块不同，不能自动替换")
-                if owner.get("state_hash") != fingerprint(state):
+                if not self._layout_state_matches(state, native, owner):
                     conflicts.append(f"受管对象 {state['handle']} 已被人工修改，请先核对")
                 if owner.get("block_hash") != block_hash:
                     conflicts.append("受管图框定义已变化，请先核对")
@@ -800,7 +854,8 @@ class AcadLayoutMixin:
             for role, entity in owned.items():
                 state = self._layout_entity_state(entity,native)
                 self._tag_layout_entity(entity,{"layout_id":request.layout_id,"role":role,
-                    "state_hash":fingerprint(state),"block_hash":context["block_hash"],"plot_hash":plot_hash})
+                    "state_hash":fingerprint(state),"state_version":2,
+                    "block_hash":context["block_hash"],"plot_hash":plot_hash})
             if context["adopt_viewport"] is not None and semantic_binding is not None:
                 # The outer semantic boundary tags only newly created entities.
                 # Reused entities need a verified identity in this same undo group.
