@@ -18,3 +18,4 @@ test_new_output/
 *.zip
 .idea/
 .vscode/
+.codex/
