@@ -418,3 +418,40 @@ def test_composite_cleanup_error_keeps_original_failure(monkeypatch,native_backe
     assert "secondary cleanup failure" in str(caught.value)
     assert str(caught.value.__cause__)=="original evaluation failure"
     assert not state.entities["1"].deleted and not state.entities["2"].deleted
+
+
+
+@pytest.mark.parametrize("pattern", ["SOLID", "ANSI31"])
+def test_native_composite_supports_byref_bounds_and_preserves_hole_sources(
+        native_backend, monkeypatch, pattern):
+    original = NativeHatch.GetBoundingBox
+
+    def GetBoundingBox(self, minimum, maximum):
+        minimum.value, maximum.value = original(self)
+
+    monkeypatch.setattr(NativeHatch, "GetBoundingBox", GetBoundingBox)
+    state = native_backend
+    result = state.backend.draw_hatch(
+        boundary_handles=["1", "2"], seed_point=(1, 1), pattern=pattern,
+        scale=1 if pattern == "SOLID" else 2, dry_run=False)
+    assert result["verified"] is True
+    assert result["readback"]["area"] == pytest.approx(100 - 4 * math.pi)
+    assert result["readback"]["bounding_box"] == {
+        "min": [0., 0., 0.], "max": [10., 10., 0.]}
+    assert result["temporary_boundaries_removed"] is True
+    assert result["source_geometry_unchanged"] is True
+    assert len([e for e in state.entities.values() if not e.deleted]) == 3
+    assert not state.entities["1"].deleted and not state.entities["2"].deleted
+
+
+def test_native_composite_invalid_byref_bounds_cleans_up_without_source_changes(
+        native_backend, monkeypatch):
+    def GetBoundingBox(self, minimum, maximum):
+        minimum.value, maximum.value = (0., 0., 0.), (float("nan"), 10., 0.)
+
+    monkeypatch.setattr(NativeHatch, "GetBoundingBox", GetBoundingBox)
+    state = native_backend
+    with pytest.raises(RuntimeError, match="三维边界"):
+        state.backend.draw_hatch(
+            boundary_handles=["1", "2"], seed_point=(1, 1), pattern="SOLID", dry_run=False)
+    assert {h for h, e in state.entities.items() if not e.deleted} == {"1", "2"}

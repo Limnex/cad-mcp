@@ -11,6 +11,20 @@ import win32com.client
 _ARGUMENT_COUNT_ERRORS = {0x8002000E, 0x8002000F}
 
 
+def _missing_output_arguments(error, method):
+    """Recognize CPython argument binding failures, including through COM proxies."""
+    if f"{method}() missing 2 required positional arguments:" not in str(error):
+        return False
+    traceback = error.__traceback__
+    while traceback is not None:
+        # A method that was entered raised an operational error, even if its
+        # message happens to resemble Python's missing-argument diagnostic.
+        if traceback.tb_frame.f_code.co_name == method:
+            return False
+        traceback = traceback.tb_next
+    return True
+
+
 def out_pair(obj, method, *, leading=(), variant_type=None):
     """Read two OUT arguments; never replay operational/permission COM errors.
 
@@ -25,7 +39,10 @@ def out_pair(obj, method, *, leading=(), variant_type=None):
     try:
         values = function(*leading)
     except (TypeError,pythoncom.com_error) as exc:
-        if isinstance(exc,pythoncom.com_error) and (exc.hresult & 0xFFFFFFFF) not in _ARGUMENT_COUNT_ERRORS:
+        if isinstance(exc, TypeError):
+            if not _missing_output_arguments(exc, method):
+                raise
+        elif (exc.hresult & 0xFFFFFFFF) not in _ARGUMENT_COUNT_ERRORS:
             raise
         initial = None if variant_type == pythoncom.VT_VARIANT else 0.0
         first = win32com.client.VARIANT(pythoncom.VT_BYREF | variant_type,initial)

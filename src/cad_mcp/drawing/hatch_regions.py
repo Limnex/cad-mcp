@@ -219,6 +219,7 @@ def fill_acad_region(backend, *, boundary_handles, seed_point, pattern, scale, a
     import pythoncom
     import win32com.client
     from cad_mcp.dwt.autocad import _dispatch_array
+    from cad_mcp.drawing.com_read import bounding_box
 
     backend._check_doc()
     validate_handles(boundary_handles, seed_point, associative)
@@ -263,7 +264,7 @@ def fill_acad_region(backend, *, boundary_handles, seed_point, pattern, scale, a
         hatch.Evaluate()
         backend.doc.Regen(1)
         def read():
-            low, high = hatch.GetBoundingBox()
+            low, high = bounding_box(hatch)
             return {
                 "entity_type": str(hatch.EntityName), "pattern_name": str(hatch.PatternName),
                 "associative": bool(hatch.AssociativeHatch), "layer": str(hatch.Layer),

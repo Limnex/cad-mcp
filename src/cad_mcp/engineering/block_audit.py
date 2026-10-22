@@ -190,8 +190,10 @@ def _flat_points(value: Any, stride: int) -> List[Point3]:
 
 
 def _bbox(entity: Any) -> Optional[Dict[str, List[float]]]:
+    from cad_mcp.drawing.com_read import bounding_box
+
     try:
-        low, high = entity.GetBoundingBox()
+        low, high = bounding_box(entity)
         low_point, high_point = _point3(low), _point3(high)
         if low_point is None or high_point is None:
             return None

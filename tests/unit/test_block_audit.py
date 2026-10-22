@@ -269,3 +269,37 @@ def test_acad_block_audit_keeps_source_unchanged_and_uses_explicit_manifest(
     assert result["block"]["name"] == "BOX"
     assert closed == [(True, None)]
     assert source.read_bytes() == b"read-only source"
+
+
+
+def test_block_audit_byref_bounds_match_direct_audit_without_mutating_entities(monkeypatch):
+    entities = rectangle_entities()
+    block = Block("BOX", entities)
+    document = SimpleNamespace(Blocks=Collection([block]))
+    reference = build_block_audit(block, document, spec())
+    before = [dict(vars(e)) for e in entities]
+
+    def GetBoundingBox(self, minimum, maximum):
+        minimum.value, maximum.value = self.bounds
+
+    monkeypatch.setattr(Entity, "GetBoundingBox", GetBoundingBox)
+    assert build_block_audit(block, document, spec()) == reference
+    assert [dict(vars(e)) for e in entities] == before
+
+
+def test_block_audit_invalid_bounds_remain_unverified(monkeypatch):
+    entities = rectangle_entities()
+    block = Block("BOX", entities)
+
+    def GetBoundingBox(self, minimum, maximum):
+        minimum.value, maximum.value = (0., 0., 0.), (float("inf"), 10., 0.)
+
+    monkeypatch.setattr(Entity, "GetBoundingBox", GetBoundingBox)
+    result = build_block_audit(block, SimpleNamespace(Blocks=Collection([block])), spec())
+    assert result["geometry"]["bounding_box"] is None
+    assert result["block"]["entity_tree_complete"] is False
+    assert result["fingerprint"]["complete"] is False
+    assert all("bounding_box" in node["unverified_fields"]
+               for node in result["entity_tree"]["entities"])
+    size = next(item for item in result["comparison"]["items"] if item["id"] == "size")
+    assert size["status"] == "无法验证"

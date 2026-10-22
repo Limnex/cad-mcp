@@ -320,3 +320,42 @@ def test_explicit_tiny_tolerance_is_not_swallowed_by_roundoff_threshold():
     ], [], 1e-12)
     assert len(result["issues"]) == 1
     assert "1e-13mm" in result["issues"][0]
+
+
+
+def test_query_byref_bounds_preserves_filter_pagination_and_read_only_state(monkeypatch, tmp_path):
+    class Entity:
+        EntityName = "AcDbLine"
+        Layer = "PIPE"
+        calls = 0
+        def __init__(self, handle):
+            self.Handle = handle
+        def GetBoundingBox(self, minimum, maximum):
+            self.calls += 1
+            minimum.value, maximum.value = (-10., -5., 0.), (20., 30., 0.)
+
+    entities = [Entity("A"), Entity("B"), Entity("C")]
+    backend = fake_backend(monkeypatch, tmp_path, entities)
+    first = backend.query_entities(layer="PIPE", entity_type="LINE", limit=2, include_bounds=True)
+    second = backend.query_entities(offset=first["next_offset"], limit=2, include_bounds=True)
+    rows = first["entities"] + second["entities"]
+    assert [r["handle"] for r in rows] == ["10", "11", "12"]
+    assert all(r["bounds"] == {"min": [-10., -5.], "max": [20., 30.]} for r in rows)
+    assert second["next_offset"] is None
+    assert [e.calls for e in entities] == [1, 1, 1]
+    without = backend.query_entities(include_bounds=False)
+    assert all("bounds" not in r for r in without["entities"])
+    assert [e.calls for e in entities] == [1, 1, 1]
+    assert [e.Handle for e in entities] == ["A", "B", "C"]
+
+
+def test_query_invalid_byref_bounds_are_explicitly_unavailable(monkeypatch, tmp_path):
+    class Entity:
+        Handle, Layer, EntityName = "A", "PIPE", "AcDbLine"
+        def GetBoundingBox(self, minimum, maximum):
+            minimum.value, maximum.value = (0., 0., 0.), (float("nan"), 1., 0.)
+
+    backend = fake_backend(monkeypatch, tmp_path, [Entity()])
+    result = backend.query_entities(include_bounds=True)
+    assert result["entities"][0]["handle"] == "10"
+    assert result["entities"][0]["bounds"] is None

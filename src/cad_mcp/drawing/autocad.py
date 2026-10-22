@@ -2276,7 +2276,7 @@ class AcadBackend(AcadLayoutMixin, AcadDwtMixin):
             hatch.Evaluate()
             self.doc.Regen(1)
 
-            low, high = hatch.GetBoundingBox()
+            low, high = bounding_box(hatch)
             readback = {
                 "entity_type": str(hatch.EntityName),
                 "pattern_name": str(hatch.PatternName),
@@ -3655,7 +3655,7 @@ class AcadBackend(AcadLayoutMixin, AcadDwtMixin):
                 }
                 if include_bounds:
                     try:
-                        mn, mx = e.GetBoundingBox()
+                        mn, mx = bounding_box(e)
                         row["bounds"] = {
                             "min": [float(mn[0]), float(mn[1])],
                             "max": [float(mx[0]), float(mx[1])],

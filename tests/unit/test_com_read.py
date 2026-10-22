@@ -67,3 +67,41 @@ def test_xdata_out_arguments_preserve_leading_application_name():
             values.value=(application,"metadata")
     assert out_pair(Entity(),"GetXData",leading=("CAD_MCP_LAYOUT_V1",)) == (
         (1001,1000),("CAD_MCP_LAYOUT_V1","metadata"))
+
+
+
+@pytest.mark.parametrize("proxied", [False, True])
+def test_python_missing_output_arguments_remain_compatible_through_proxy(proxied):
+    from cad_mcp.drawing.autocad import _ComRetryProxy
+
+    class Entity:
+        def GetBoundingBox(self, minimum, maximum):
+            minimum.value = (0., 0., 0.)
+            maximum.value = (40., 30., 0.)
+
+    entity = Entity()
+    assert bounding_box(_ComRetryProxy(entity) if proxied else entity) == (
+        (0., 0., 0.), (40., 30., 0.))
+
+
+@pytest.mark.parametrize("proxied", [False, True])
+@pytest.mark.parametrize("message", [
+    "internal conversion failed",
+    "Entity.GetBoundingBox() missing 2 required positional arguments: 'a' and 'b'",
+])
+def test_internal_type_error_is_not_replayed_or_replaced(proxied, message):
+    from cad_mcp.drawing.autocad import _ComRetryProxy
+
+    failure = TypeError(message)
+
+    class Entity:
+        calls = 0
+        def GetBoundingBox(self, *args):
+            self.calls += 1
+            raise failure
+
+    entity = Entity()
+    with pytest.raises(TypeError) as caught:
+        bounding_box(_ComRetryProxy(entity) if proxied else entity)
+    assert caught.value is failure
+    assert entity.calls == 1

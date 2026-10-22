@@ -416,3 +416,19 @@ def test_acad_failed_creation_or_readback_deletes_new_hatch_and_rolls_back(monke
     assert ("rollback", True) in state.events
     assert not any(event[0] == "commit" for event in state.events)
     assert state.events[-1] == ("release", None)
+
+
+
+@pytest.mark.parametrize("pattern", ["SOLID", "ANSI31"])
+def test_single_boundary_fill_supports_byref_bounds(acad_backend, monkeypatch, pattern):
+    def GetBoundingBox(self, minimum, maximum):
+        minimum.value, maximum.value = (0., 0., 0.), (10., 5., 0.)
+
+    monkeypatch.setattr(_AcadHatch, "GetBoundingBox", GetBoundingBox)
+    state = acad_backend
+    result = state.backend.draw_hatch(
+        boundary_handle="10", pattern=pattern, associative=True, dry_run=False)
+    assert result["verified"] is True
+    assert result["readback"]["bounding_box"] == {
+        "min": [0., 0., 0.], "max": [10., 5., 0.]}
+    assert not state.boundary.deleted and not state.hatch.deleted
