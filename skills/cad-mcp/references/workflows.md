@@ -53,9 +53,25 @@
 
 规格卡像验收表：没有写在表里的目标不能由工具代填。代理实体、循环嵌套、实体过多、几何参数不可读或嵌套变换无法用于派生分析时，保留已读取证据并返回“无法验证”。不要把包围盒中心称作面积形心；面积形心不可计算时保持 `null`。
 
+## 直接图元的登记、标注与图案填充
+
+默认严格模式下，在创建图元前用 `cad_register_semantic_object` 登记真实对象；每次创建
+提供 `semantic` 绑定。复制、阵列、插块、图框和视口同样执行此约束，不先画后补。
+登记请求见[严格语义模式](../../../docs/configuration.md#严格语义模式)。
+
+直径标注：核对当前样式、圆心、圆上一点和可选文字位置 → 确认写入 →
+`cad_draw_diameter_dimension` → 核对 `diameter`、`dimstyle` 和实际实体 → 检查后保存。
+该工具没有 `dry_run`，也不与现有圆建立自动更新关联。
+
+图案填充：查询实际边界句柄 → `cad_draw_hatch(dry_run=true)` → 核对图案、面积和孔洞 →
+确认后用相同参数及 `dry_run=false` → 检查 `verified`、`readback`、源边界保留和辅助边界
+清理 → 查询关键实体 → `cad_check_drawing` → 保存。组合区域使用 `boundary_handles`
+与内部 `seed_point`，必须 `associative=false`；边界不闭合时停止，不自动补线。
+AutoCAD 非 SOLID 图案的预览不能证明图案可用。详细参数见[工具契约](tool-contracts.md#图案填充与组合闭合区域)。
+
 ## 实心填充工作流
 
-健康检查 → 确认目标图纸 → `cad_fill_closed_boundary_solid(dry_run=true)` → 核对边界来源、图层、关联性和保留策略 → 用户确认实际写入 → 原参数改为 `dry_run=false` → 检查 `verified=true` 和完整 `readback` → 查询关键实体 → `cad_check_drawing` → 保存。
+健康检查 → 确认目标图纸和已登记对象 → `cad_fill_closed_boundary_solid(dry_run=true)` → 核对边界来源、图层、关联性和保留策略 → 用户确认实际写入 → 原参数改为 `dry_run=false` → 检查 `verified=true` 和完整 `readback` → 查询关键实体 → `cad_check_drawing` → 保存。
 
 AutoCAD 正式写入必须在一个撤销组内完成。创建 Hatch 后立即附加外边界，再 Evaluate、REGEN 和回读；任何一步失败就删除本次对象并停止。不得用普通闭合多段线、宽线或实体面冒充 HATCH 成功。
 

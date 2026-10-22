@@ -33,6 +33,23 @@ CAD MCP 只负责把已经确定的数据转换为 CAD 实体。工程尺寸、�
 
 原生二维倒角使用 `cad_chamfer`：支持两侧距离、距离＋角度、修剪控制、多段线整体倒角和连续多组处理，默认只预览，执行后回读验证并在失败时撤销。参数及示例见[使用指南](docs/usage.md#cad-原生倒角)。
 
+## 绘图前登记工程对象
+
+默认启用 `semantic_policy=strict`：先用 `cad_register_semantic_object` 登记工程对象，
+再在创建图元时传入 `semantic`，说明项目、对象和图元用途。复制、阵列、插块、图框和
+视口等创建操作也受此约束；现有图纸不会自动迁移。登记相当于给图元建立可核对的身份卡，
+不能代替工程设计依据。调用示例见[严格语义模式](docs/configuration.md#严格语义模式)。
+
+## 图案填充与直径标注
+
+`cad_draw_hatch` 在 DXF 和 AutoCAD 中按已有边界创建图案填充，支持图案、比例、角度，
+以及多条直线/圆弧围成的组合区域和独立内圈留空。默认 `dry_run=true` 先预览；组合模式
+必须使用 `associative=false`，保留用户边界，不自动补断口。见[图案填充](docs/usage.md#图案填充)。
+
+`cad_draw_diameter_dimension` 按圆心和圆上一点创建原生直径尺寸，支持两种模式和可选文字
+位置，继承当前标注样式。它直接写入、没有 `dry_run`，也不与已有圆建立自动更新关联。
+见[圆形直径标注](docs/usage.md#圆形直径标注)。
+
 ## 编辑已有实体
 
 用 `cad_get_entity_properties` 按十进制句柄读取当前属性，再用 `cad_edit_entity_properties` 修改。支持通用外观、文字、直线、圆，以及圆弧、多段线、块引用、填充、椭圆和点。
@@ -106,14 +123,14 @@ codex plugin list
 
 1. 使用 `cad-mcp config set mode dxf` 设置默认模式。
 2. 在客户端中先调用 `cad_health(reconnect=false)`。
-3. 新建或打开 DXF，完成绘制后执行 `cad_check_drawing` 再保存。
+3. 新建或打开 DXF，先登记工程对象并在创建图元时提供 `semantic`，完成后执行 `cad_check_drawing` 再保存。
 
 ### AutoCAD 模式
 
 1. **手动启动 AutoCAD，并等待主界面完全加载。**
 2. 在 Codex 桌面端调用 `cad_health(reconnect=false)`，不得用 `reconnect=true` 冷启动。
 3. 确认 AutoCAD 已运行后，再切换到 `acad` 模式并新建或打开图纸。
-4. 写入前确认当前活动图纸，重要操作先预览或 dry-run。
+4. 写入前确认当前活动图纸；创建图元前登记工程对象并提供 `semantic`，重要操作先预览或 dry-run。
 5. 保存前执行 `cad_check_drawing`；需要保留窗口时不要让 MCP 关闭 AutoCAD。
 
 详细流程见 [使用指南](docs/usage.md)。冷启动崩溃和日志排查见
@@ -138,6 +155,7 @@ cad-mcp config set mode acad
 
 - [安装指南](docs/installation.md)
 - [使用指南](docs/usage.md)
+- [完整布局工作流](docs/sheet-layouts.md)
 - [配置指南](docs/configuration.md)
 - [故障排查](docs/troubleshooting.md)
 - [架构说明](docs/architecture.md)

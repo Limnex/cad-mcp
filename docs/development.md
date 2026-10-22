@@ -145,3 +145,21 @@ try {
 
 用例仅在自有临时图纸中绘制并预览，比较图纸路径、实体数、保存状态、视图、活动布局与
 选择集数量，结束后不保存临时图纸并恢复原活动图纸。不会冷启动 AutoCAD。
+
+## 直径标注、填充与语义登记的定向验证
+
+```powershell
+uv run pytest tests/unit/test_diameter_dimension.py tests/unit/test_pattern_hatch.py tests/unit/test_hatch_regions.py tests/unit/test_semantic_enforcement.py tests/integration/test_semantic_stdio.py
+```
+
+这些现有用例覆盖两种后端接口的直径标注参数与样式行为、图案比例/角度、组合区域及圆孔、
+无效边界拒绝、源图元保留、回读/失败清理，以及完整/网关工具的严格语义约束。
+其中 AutoCAD 替身与 stdio 测试不证明真实 AutoCAD 的绘制结果。真实测试仍按上文开关
+和图纸保护要求单独执行，并根据实际输出记录通过、失败和未验证项。
+
+模板清单的结构示例为 `skills/cad-mcp/examples/template-manifest.json`，可用
+`cad_mcp.engineering.templates.TemplateManifest.model_validate` 校验字段结构。
+示例中的路径、64 个零组成的哈希、块名和尺寸均须替换为核验过的数据，再使用
+`cad_verify_template_manifest` 检查真实源 DWG。结构校验不访问 CAD，也不证明源文件、
+图框范围、打印资源或最终布局正确；完整布局还要求 `paper_reference_bounds` 和
+`printed_bounds`，不能从图块包围盒推测。

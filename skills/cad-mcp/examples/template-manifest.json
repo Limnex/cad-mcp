@@ -1,9 +1,60 @@
 {
-  "source_file": "template.dwg",
-  "sha256": "REPLACE_WITH_VERIFIED_SHA256",
-  "paper": {"name": "A3", "width": 420, "height": 297},
-  "usable_area": {"min": [20, 20], "max": [400, 277]},
-  "field_anchors": [],
-  "table_regions": [],
-  "blocks": []
+  "schema_version": "1.0",
+  "template_id": "example-frame",
+  "source_dwg": "D:/CAD/templates/example-frame.dwg",
+  "source_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "source_units": "millimeters",
+  "sheets": [
+    {
+      "id": "example-a3-landscape",
+      "paper_size": "A3",
+      "orientation": "landscape",
+      "paper_width": 420,
+      "paper_height": 297,
+      "block_name": "EXAMPLE_FRAME_A3",
+      "source_bounds": [
+        10,
+        10,
+        410,
+        287
+      ],
+      "paper_reference_bounds": [
+        0,
+        0,
+        420,
+        297
+      ],
+      "printed_bounds": [
+        10,
+        10,
+        410,
+        287
+      ],
+      "usable_regions": [
+        {
+          "id": "main",
+          "x": 20,
+          "y": 20,
+          "width": 350,
+          "height": 257
+        }
+      ],
+      "reserved_regions": [
+        {
+          "id": "title",
+          "x": 380,
+          "y": 20,
+          "width": 20,
+          "height": 257
+        }
+      ],
+      "fixed_insert_scale": 1,
+      "fields": {},
+      "tables": {}
+    }
+  ],
+  "metadata": {
+    "structure_example_only": true,
+    "instructions": "路径、64 个零的哈希、块名、尺寸及区域仅为结构示例；使用前须按真实源 DWG 替换并核验，不代表任何制图标准。"
+  }
 }

@@ -1,6 +1,6 @@
 # CAD MCP 工具契约
 
-本文记录调用约束。当前运行时版本为 `1.5.3`，注册 105 个 `cad_*` 工具。具体参数名和返回字段以运行时 MCP 工具定义为准；若运行时定义与本文不一致，应以运行时定义为准并报告差异。
+本文记录调用约束。当前运行时版本为 `1.5.3`，注册 114 个 `cad_*` 工具。具体参数名和返回字段以运行时 MCP 工具定义为准；若运行时定义与本文不一致，应以运行时定义为准并报告差异。
 
 ## 调用前
 
@@ -162,6 +162,56 @@ LINE、ARC、CIRCLE 和 LWPOLYLINE。句柄使用查询结果中的十进制字�
 
 块规格卡中的每个 `checks[]` 使用 JSON Pointer 指向审查结果，并显式给出比较运算、期望值和必要容差。逐项状态固定为：实际证据满足规格时“通过”；可读取但不满足时“偏差”；规格缺失、实际不可读或证据不完整时“无法验证”。汇总时偏差优先，其次是无法验证；只有所有声明项都通过时总状态才是通过。指纹算法为 `cad-mcp:block-geometry:v1`，剔除句柄、路径等易变信息，按规格卡声明的量化精度规范化并排序实体；实体树不完整时指纹仍可供诊断，但 `complete=false`，不能作为通过证据。
 
+## 圆形直径标注
+
+`cad_draw_diameter_dimension` 支持 DXF 和 AutoCAD，按坐标创建原生 DIMENSION，
+自动显示直径符号并继承当前标注样式。没有 `dry_run`，实际调用会写入；默认严格模式下
+须先登记对象，并提供 `semantic` 绑定。
+
+| 参数 | 默认值与约束 |
+|---|---|
+| `cx`, `cy` | 必填，模型圆心坐标 |
+| `edge_x`, `edge_y` | 必填，圆上一点，决定几何直径及标注方向；不得与圆心重合 |
+| `text_x`, `text_y` | 可选，须同时提供；指定文字位置 |
+| `layer` | `DIM` |
+
+坐标必须有限，对径点及直径也须处于有限数值范围。返回 `type="DIMENSION"`、
+`kind="diameter"`、十进制 `handle`、`layer`、`diameter` 和 `dimstyle`。
+几何直径为 `2*hypot(edge_x-cx, edge_y-cy)`，显示单位由当前样式控制；不与已有圆建立
+自动更新关联，不把返回的几何值当作经过 DIMLFAC 换算后的显示文字。不自动保存。
+请求示例见[使用指南](../../../docs/usage.md#圆形直径标注)。
+
+## 图案填充与组合闭合区域
+
+`cad_draw_hatch` 支持 DXF 和 AutoCAD。仅按已有图元指定范围，不接受 `points`。
+
+| 参数 | 默认值与约束 |
+|---|---|
+| `boundary_handle` | 单个闭合边界的十进制字符串句柄；与 `boundary_handles` 必须且只能选一种 |
+| `boundary_handles` | 组合模式，1–64 个不重复的十进制字符串句柄，每项最长 40 字符 |
+| `seed_point` | 组合模式必填，区域内部有限的 WCS XY `[x,y]`，毫米；单边界模式不传 |
+| `pattern` | `ANSI31`，非空预定义图案名，最多 255 字符，不含控制字符，去首尾空格并转大写 |
+| `scale` | `1`，有限数，`0 < scale <= 1000`；SOLID 只能用 1 |
+| `angle` | `0`，输入范围 `[-360,360]` 度，归一化到 `[0,360)`；SOLID 归一化后须为 0 |
+| `layer` | `FILL` |
+| `associative` | `false`；组合模式只接受 false，不能冒充关联填充 |
+| `dry_run` | `true`，确认预览后才使用 false 正式创建 |
+| `semantic` | 严格模式下正式创建时提供已登记对象的绑定，见下文语义登记约束 |
+
+单边界模式保留现有边界；DXF 支持闭合直线多段线和圆，含 bulge 的边界须改用组合模式，
+不得把圆弧离散成折线。组合模式接受当前模型空间同标高、法向 +Z 的 XY 平面 LINE、ARC、
+CIRCLE 和二维多段线，包括圆弧段；不补断口，拒绝自交、重叠、悬挂和不共面边界。
+定位点选择一个封闭区域，所选区域内独立封闭内圈成为孔洞，不是拾取任意一点自动搜索整张图。
+
+预览 `dry_run=true` 不改图；组合结果包含 `boundary_area`、`outer_area`、`excluded_area`、
+`hole_count`、`loop_count`、`boundary_loops`、`bounding_box` 和图案参数。
+DXF 先检查图案库；AutoCAD 非 SOLID 图案返回
+`pattern_availability="unverified_until_creation"`，预览不保证本机图案可用。
+正式结果检查 `verified` 与 `readback` 中图案、关联性、图层、环路及几何读数；组合结果另有
+`source_geometry_unchanged` 和 `temporary_boundaries_removed`。源图元始终保留；
+临时辅助边界由工具清理，失败时检查清理/回滚结果，不自动保存。
+组合请求示例见[使用指南](../../../docs/usage.md#图案填充)。
+
 ## 封闭边界实心填充
 
 - `cad_fill_closed_boundary_solid`：DXF 和 AutoCAD 均支持。`boundary_handle` 与 `points` 必须且只能提供一个，`layer`、`associative`、`keep_boundary`、`dry_run` 都必须显式提供；不自动填充任何默认策略。
@@ -178,6 +228,22 @@ LINE、ARC、CIRCLE 和 LWPOLYLINE。句柄使用查询结果中的十进制字�
 - `cad_insert_block` 增加外部 `source_path`、属性值、图层、XYZ 比例和字段绑定；默认不覆盖已有定义，未知属性标签必须明确返回。
 
 ## 语义工作流工具
+
+### 直接绘图登记与审计
+
+默认 `semantic_policy=strict`，在 `cad_health` 中核对。先调用
+`cad_register_semantic_object`，在 `params.object` 中提供 `project_id`、`object_id`、
+`name`、`object_type`、`source`，可选 `parent_id` 和 `status`；父对象先登记。
+创建图元的调用在 `params.semantic` 中提供 `project_id`、`object_id`、`role` 和可选
+`view_id`，不得先创建再回补。复制、阵列、插块、图框、视口及可能创建图元的正式 DWT
+应用也执行约束。登记与图元身份存入图纸，现有图纸不会自动迁移。
+
+`cad_get_entity_semantics` 按十进制句柄只读查询；`cad_get_entity_properties` 也返回
+`semantic`。`cad_check_semantics` 只读审计，返回不完整时不得宣称身份冲突或重复已排除。
+策略只能由操作者在启动前配置，Agent 不得切换兼容模式来绕过缺失的真实对象信息。
+完整请求与恢复边界见[严格语义模式](../../../docs/configuration.md#严格语义模式)。
+
+### 工程模型的校验与应用
 
 - `cad_load_drafting_profile`：兼容加载 1.0 环境制图配置和严格的 2.0 通用 DWT 配置；返回绝对路径、SHA-256 和 schema 版本。2.0 中的外部 DWG 块库在加载时校验路径与哈希，字体、CTB 和 PC3 留给后端按实际安装资源核验。
 - `cad_load_environment_rule_set`：加载外部校核规则。

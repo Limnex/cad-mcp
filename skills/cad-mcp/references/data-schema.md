@@ -74,6 +74,39 @@
 
 结构示例见 [dwt-profile-v2.schema-example.json](../examples/dwt-profile-v2.schema-example.json)。该示例不包含未经核验的本机资源，不是正式用户配置。
 
+## 图框模板清单 1.0
+
+[template-manifest.json](../examples/template-manifest.json) 对应
+`cad_mcp.engineering.templates.TemplateManifest`；它与下节的块审查规格卡用途不同。
+
+| 顶层字段 | 要求 |
+|---|---|
+| `schema_version` | 默认 `"1.0"` |
+| `template_id` | 必填，稳定且非空的模板标识 |
+| `source_dwg` | 必填，源 DWG 路径；相对路径按清单所在目录解析 |
+| `source_sha256` | 必填，真实源文件的 64 位十六进制 SHA-256 |
+| `source_units` | 默认 `unitless`，应按核验结果填写 |
+| `sheets` | 必填，1–128 个图幅配置 |
+| `metadata` | 可选说明对象 |
+
+每个 `sheets[]` 至少提供 `id`、`paper_size`、正值 `paper_width/paper_height`、
+`block_name`、`source_bounds=[xmin,ymin,xmax,ymax]`、`usable_regions` 和正值
+`fixed_insert_scale`；`orientation` 默认 `landscape`，可选 `portrait`。
+`source_bounds` 是实际图块范围，`fixed_insert_scale` 是源坐标到布局毫米的固定换算，
+不能为了塞入纸张而调整。
+
+完整布局工具还必须显式提供 `paper_reference_bounds`（块定义中的物理纸张参考矩形）
+和 `printed_bounds`（需打印图框线范围）。这两个字段在模型结构上允许省略，仅为兼容旧
+清单；完整布局遇到缺失即停止。`usable_regions` 和可选 `reserved_regions` 每项为
+`{id,x,y,width,height}`，采用从物理纸张左下角起算的毫米坐标，不能与块定义坐标混用。
+`fields`、`tables` 按需要声明；所有层级拒绝未知字段，坐标必须有限。
+
+示例只用于结构演示：路径、块名、A3 尺寸和区域划分不代表真实图框或规范，
+`source_sha256` 的 64 个零是待替换占位值，不能作为哈希核验通过的证据。
+先替换为已核验的源文件和范围，再调用 `cad_verify_template_manifest`；只做 JSON 结构
+校验不证明文件存在、哈希匹配或布局正确。打印边距与模型比例仍须按
+[完整布局工作流](../../../docs/sheet-layouts.md) 独立核验。
+
 ## DWG 块规格卡 1.0
 
 指定块深度审查使用文件名以 `_manifest.json` 结尾的 UTF-8 JSON。顶层必须显式包含：

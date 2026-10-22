@@ -93,6 +93,15 @@ AutoCAD 圆角使用 `cad_fillet`：先查十进制句柄，指定半径、拾�
 
 需要原生注释性块时，仅在 `acad` 模式调用 `cad_make_block(annotative=true)`；需要 ATTDEF 属性时调用 `cad_create_or_update_attribute_block(annotative=true)`。两种调用均检查 `verified` 与 `readback`。DXF 模式不支持此开关；不得用普通块加手动比例冒充。
 
+直径尺寸用 `cad_draw_diameter_dimension`，按圆心和圆上一点创建，文字位置成对提供。
+该工具没有 `dry_run`，确认坐标和语义归属后才调用；核对返回的几何 `diameter` 与
+`dimstyle`，不把它当作与现有圆自动关联的标注。详见[直径标注契约](references/tool-contracts.md#圆形直径标注)。
+
+图案填充用 `cad_draw_hatch`，先按实际句柄预览图案、比例、角度、面积和孔洞。
+组合边界使用 `boundary_handles` 与区域内部 `seed_point`，必须 `associative=false`；
+不补断口、不用折线近似圆弧。核对后再正式创建，检查 `verified`、`readback` 和辅助边界清理。
+详见[图案填充契约](references/tool-contracts.md#图案填充与组合闭合区域)。
+
 ### DWG 块审查与实心填充
 
 审查指定 DWG 块时使用 `acad` 模式和显式 `*_manifest.json` 规格卡，调用 `cad_audit_block_definition`。它只读打开源文件，输出递归实体树、几何分析、连接点、对称性和独立指纹，并逐项返回“通过、偏差、无法验证”。规格卡未声明或运行时无法读取的值保持无法验证，不补默认值。

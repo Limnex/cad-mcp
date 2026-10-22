@@ -37,7 +37,7 @@ cad-mcp config show
 1. `cad_health(reconnect=false)`。
 2. 新建或打开 DXF。
 3. 设置图层、文字和尺寸样式。
-4. 绘制或修改实体。
+4. 默认严格语义模式下先登记工程对象，创建图元时提供 `semantic`；再绘制或修改实体。
 5. 查询关键实体并检查几何范围。
 6. 执行 `cad_check_drawing`。
 7. 保存文件并确认输出路径。
@@ -47,16 +47,69 @@ cad-mcp config show
 1. 按“Codex 桌面端安全启动”手动打开 AutoCAD。
 2. 健康检查并确认活动图纸。
 3. 新建或打开工作图纸。
-4. 写入前建立只读基线；重要配置先预览或 dry-run。
+4. 写入前建立只读基线；创建图元前登记工程对象并提供 `semantic`，重要配置先预览或 dry-run。
 5. 写操作使用撤销组，发生关键错误后停止，不连续尝试修改。
 6. 保存前执行 `cad_check_drawing`。
 7. 用户要求保留窗口时，不关闭 AutoCAD 或当前图纸。
+
+## 创建图元前的语义登记
+
+默认 `semantic_policy=strict`。先调用 `cad_register_semantic_object` 登记真实工程对象，
+再在创建图元时传入 `semantic.project_id`、`object_id`、`role` 和可选 `view_id`。
+这相当于先给对象建立身份卡，再把轮廓、标注和填充归到该对象名下；不得编造用途来绕过检查。
+复制、阵列、插块、图框和视口创建也需要绑定。完整工程模型在正式应用内完成登记与绘制。
+
+登记及绘图请求示例见[严格语义模式](configuration.md#严格语义模式)。只读查询可用
+`cad_get_entity_semantics` 和 `cad_check_semantics`；现有图纸不会被自动迁移或回补身份。
 
 ## 打开指定路径的图纸
 
 `cad_open_drawing` 的 `filename` 可传受控图纸目录中的单个文件名，也可传现有本机图纸的盘符绝对路径，例如 `D:\项目\总图.dwg`。DXF 模式只接受 `.dxf`；acad 模式接受 `.dwg` 和 `.dxf`。不支持 UNC 网络路径、相对子路径或 `..` 回退。绝对路径只对“打开”生效；新建和另存为仍限定在受控目录。
 
 打开不会自动保存。若在目录外图纸上显式调用 `cad_save_drawing`，DWG 和 DXF 模式下的 DXF 会写回原文件；acad 模式打开 DXF 后则在同目录生成 DWG，目标已存在时停止。保存前先核对目标路径并执行 `cad_check_drawing`。
+
+## 图案填充
+
+`cad_draw_hatch` 支持 DXF 和 AutoCAD，按已有边界创建原生 HATCH。首次使用默认
+`dry_run=true`，核对边界、面积、孔洞和图案后才改为 `false`。默认图案 `ANSI31`、
+`scale=1`、`angle=0`（度）、`layer="FILL"`、`associative=false`。比例范围 `(0,1000]`，
+输入角度范围 `[-360,360]`；`SOLID` 要求比例 1，角度归一化后为 0。
+
+边界有两种互斥方式：单个闭合图元用 `boundary_handle`；组合区域用 1–64 个不重复的
+`boundary_handles` 加区域内部的 `seed_point=[x,y]`。定位点选择区域，不是新边界顶点。
+组合模式接受同标高 XY 平面的直线、圆弧、圆和二维多段线，保留真实圆弧，独立内圈自动
+留空；不补断口，拒绝自交、重叠、悬挂和不共面的输入。组合模式必须 `associative=false`。
+
+下例假设已登记 `P1/tank-01`，且查询得到的五个句柄共同界定目标区域与圆孔；句柄和定位点
+须替换为当前图纸的实际值：
+
+```json
+{"params":{"boundary_handles":["101","102","103","104","105"],"seed_point":[10,10],"pattern":"ANSI31","scale":1,"angle":45,"layer":"FILL","associative":false,"dry_run":true,"semantic":{"project_id":"P1","object_id":"tank-01","role":"池体剖面填充","view_id":"section"}}}
+```
+
+预览核对 `boundary_area`、`hole_count`、`boundary_loops` 和 `pattern_availability`。
+AutoCAD 的非 SOLID 图案预览不证明本机图案可用，正式创建时才验证。正式结果须检查
+`verified` 和 `readback`；用户边界保留，组合区域的临时辅助边界由工具清理，不自动保存。
+参数与单边界限制见[工具契约](../skills/cad-mcp/references/tool-contracts.md#图案填充与组合闭合区域)。
+
+需要由显式顶点创建实心填充时，继续使用 `cad_fill_closed_boundary_solid`；两者的边界
+输入和保留策略不同，不要把 `points` 传给 `cad_draw_hatch`。
+
+## 圆形直径标注
+
+`cad_draw_diameter_dimension` 支持 DXF 和 AutoCAD。提供圆心 `cx,cy` 与圆上一点
+`edge_x,edge_y`，可成对提供 `text_x,text_y` 指定文字位置；所有坐标必须有限，圆心与
+圆上一点不能重合。默认图层 `DIM`，继承当前标注样式并显示直径符号。
+
+本工具没有 `dry_run`，调用即创建标注。以下示例须先登记对应对象、核对实际坐标并确认写入：
+
+```json
+{"params":{"cx":0,"cy":0,"edge_x":500,"edge_y":0,"text_x":700,"text_y":250,"layer":"DIM","semantic":{"project_id":"P1","object_id":"tank-01","role":"池体直径尺寸","view_id":"plan"}}}
+```
+
+返回 `kind="diameter"`、`diameter`、`handle`、`layer` 和 `dimstyle`。`diameter` 是模型
+几何直径，显示单位和换算由标注样式控制；按坐标创建不会与现有圆建立自动更新关联。
+详见[工具契约](../skills/cad-mcp/references/tool-contracts.md#圆形直径标注)。
 
 ## CAD 原生倒角
 
@@ -144,8 +197,11 @@ SHX 大字体在有可用中文字体时仅在预览中替换，并在 `warnings
 ## 保存与故障停止
 
 stdio 服务把工具执行放入常驻工作子进程，主进程独立监控超时。工作进程启动最多等待
-15 秒；请求发送后，只读操作最多等待 30 秒，写操作最多等待 120 秒。请求串行执行，
-排队也有时限；不使用线程池并发修改 CAD。原有工具名称和参数不变。
+15 秒；请求发送后，普通只读操作最多等待 30 秒，普通写操作最多等待 120 秒。
+完整布局工具单独设置执行时限：`cad_preview_sheet_layout` 和 `cad_validate_sheet_layout`
+各 300 秒，`cad_apply_sheet_layout` 为 600 秒；排队仍沿用原有时限。请求串行执行，
+不使用线程池并发修改 CAD。布局应用超时同样按写入结果未知处理，不自动重试。
+完整说明见[布局工作流](sheet-layouts.md)。
 
 AutoCAD 扫描内部仍有 30 秒协作式上限。若单次原生 COM 调用永不返回，主进程会结束
 自己的工作子进程并返回错误，保留 AutoCAD；这只能让 MCP 恢复响应，不能证明 CAD
