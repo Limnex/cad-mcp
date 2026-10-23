@@ -106,5 +106,11 @@ name = "CAD MCP"
 executable = 'C:\path\to\cad-mcp-venv\Scripts\python.exe'
 args = ["-m", "cad_mcp", "--toolset", "webcodex"]
 env_from_env = { USERPROFILE = "USERPROFILE", SYSTEMROOT = "SYSTEMROOT" }
-timeout_secs = 60
+timeout_secs = 900
 ```
+
+这里的 `timeout_secs` 是客户端等待调用结果的时限。示例设为 900 秒，为完整布局工具
+最长 600 秒的执行，以及工作进程启动、请求排队和响应传输预留余量。它不会改变服务端
+的执行时限：普通读取为 30 秒、普通写入为 120 秒，完整布局预览/校验为 300 秒、应用为
+600 秒。客户端等待时间过短可能先中断等待，不能据此认定 CAD 操作已停止或回滚。
+时限及结果未知时的处理见[保存与故障停止](usage.md#保存与故障停止)。

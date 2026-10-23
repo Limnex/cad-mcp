@@ -196,7 +196,7 @@ LINE、ARC、CIRCLE 和 LWPOLYLINE。句柄使用查询结果中的十进制字�
 | `layer` | `FILL` |
 | `associative` | `false`；组合模式只接受 false，不能冒充关联填充 |
 | `dry_run` | `true`，确认预览后才使用 false 正式创建 |
-| `semantic` | 严格模式下正式创建时提供已登记对象的绑定，见下文语义登记约束 |
+| `semantic` | 严格模式下预览和正式创建均须提供已登记对象的绑定，见下文语义登记约束 |
 
 单边界模式保留现有边界；DXF 支持闭合直线多段线和圆，含 bulge 的边界须改用组合模式，
 不得把圆弧离散成折线。组合模式接受当前模型空间同标高、法向 +Z 的 XY 平面 LINE、ARC、

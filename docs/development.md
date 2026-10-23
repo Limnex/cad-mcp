@@ -163,3 +163,43 @@ uv run pytest tests/unit/test_diameter_dimension.py tests/unit/test_pattern_hatc
 `cad_verify_template_manifest` 检查真实源 DWG。结构校验不访问 CAD，也不证明源文件、
 图框范围、打印资源或最终布局正确；完整布局还要求 `paper_reference_bounds` 和
 `printed_bounds`，不能从图块包围盒推测。
+
+## 严格语义的真实 AutoCAD 验证
+
+`tests/integration/test_semantic_acad.py` 单独验证严格语义登记、复制归属、人工改动识别、
+元数据写入失败后的真实撤销，以及保存并重新打开测试 DWG 后的身份保留。先手动打开
+AutoCAD，并获得实机写入授权，再单独启动以下测试进程：
+
+```powershell
+$env:CAD_MCP_RUN_ACAD_INTEGRATION = '1'
+try {
+    uv run pytest tests/integration/test_semantic_acad.py -m acad -x -s
+} finally {
+    Remove-Item Env:CAD_MCP_RUN_ACAD_INTEGRATION
+}
+```
+
+测试只连接已有 AutoCAD，在自有临时图纸中写入、保存和重开；另建一张含测试线段的
+过渡图纸，供关闭和重开时切换。它不会在原有用户图纸中执行测试写入，也不会冷启动 CAD。
+每个阶段和工具调用前后均记录文档快照，比较原有图纸的名称、路径、保存/修改状态，以及
+模型空间和各布局空间的图元数量；关闭测试 DWG 前核对实际绑定路径和文件名。
+
+只有同时证实未命名、未修改、模型空间为空且各布局无实际绘图内容的启动空白页，才允许
+在 AutoCAD 打开图纸时自然消失；内置布局视口不视为实际绘图内容。已有文件的空图纸、
+被修改的未命名图纸、有模型或布局内容的图纸，以及状态证据不全的图纸仍受保护。
+空白页若继续存在，其状态也不得改变；结束时还检查是否遗留非空白的额外测试图纸。
+
+成功流程会核对身份后关闭自有测试图纸，并恢复仍存在的原活动图纸。发生异常后不再
+继续 CAD 写操作，保留当时现场，并记录仍绑定的测试图纸和过渡图纸。终端输出的
+`LIVE_REPORT` 指向 `semantic-live-report.json`，其中
+记录阶段、调用、文档快照、关闭身份检查和失败信息；应根据实际报告说明通过、失败和
+未验证项，不能把未运行或被跳过的用例写成通过。
+
+无需连接 AutoCAD 的图纸保护规则回归可单独运行：
+
+```powershell
+uv run pytest tests/unit/test_acad_original_documents.py
+```
+
+该回归检查空白页例外、原图保护、布局内容和活动图纸恢复规则，不证明真实 AutoCAD
+中的写入、保存、重开或撤销已经验证通过。
