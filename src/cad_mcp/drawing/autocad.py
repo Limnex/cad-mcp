@@ -800,8 +800,6 @@ class AcadBackend(AcadLayoutMixin, AcadDwtMixin):
         acad = self._connect()
         self._wait_acad_ready(acad)
         template, template_source = self._resolve_new_drawing_template(acad, template_path)
-        from cad_mcp.drawing.document_guard import assert_safe_document_open
-        assert_safe_document_open(acad)
         self._own_document = False
         doc = None
         add_error = None
@@ -870,8 +868,6 @@ class AcadBackend(AcadLayoutMixin, AcadDwtMixin):
         opened_here = False
         if doc is None:
             self._assert_no_external_lock(path)
-            from cad_mcp.drawing.document_guard import assert_safe_document_open
-            assert_safe_document_open(acad)
             doc = acad.Documents.Open(str(path))
             opened_here = True
         if bool(_safe_get(doc, "ReadOnly", False)):
@@ -983,8 +979,6 @@ class AcadBackend(AcadLayoutMixin, AcadDwtMixin):
             acad = self._connect()
             if self._find_open_document(acad, output) is not None:
                 raise PermissionError(f"工作副本目标已在 AutoCAD 中打开，未接管: {output}")
-            from cad_mcp.drawing.document_guard import assert_safe_document_open
-            assert_safe_document_open(acad)
             opened_doc = acad.Documents.Open(str(output))
             self._use_doc(opened_doc, expected_path=output)
             self.current_path = output
@@ -1049,8 +1043,6 @@ class AcadBackend(AcadLayoutMixin, AcadDwtMixin):
             except Exception:
                 continue
         if template_doc is None:
-            from cad_mcp.drawing.document_guard import assert_safe_document_open
-            assert_safe_document_open(acad)
             template_doc = acad.Documents.Open(str(source), True)
             opened_here = True
         try:

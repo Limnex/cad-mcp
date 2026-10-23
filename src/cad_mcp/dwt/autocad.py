@@ -1197,8 +1197,6 @@ class AcadDwtMixin:
             except Exception:
                 continue
         if document is None:
-            from cad_mcp.drawing.document_guard import assert_safe_document_open
-            assert_safe_document_open(acad)
             document = acad.Documents.Open(str(source), True)
             opened_here = True
         return document, opened_here, previous

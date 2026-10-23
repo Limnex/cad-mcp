@@ -53,7 +53,8 @@ def test_acad_new_drawing_rejects_existing_target_before_connect(tmp_path) -> No
         backend.new_drawing(target.name)
 
 
-def test_acad_new_drawing_preserves_template_layers_and_current_layer(tmp_path, monkeypatch) -> None:
+@pytest.mark.parametrize("startup_path", [None, "", "Drawing1.dwg"])
+def test_acad_new_drawing_preserves_template_layers_and_current_layer(tmp_path, monkeypatch, startup_path) -> None:
     template = tmp_path / "qnew.dwt"
     template.write_bytes(b"dwt")
 
@@ -66,8 +67,15 @@ def test_acad_new_drawing_preserves_template_layers_and_current_layer(tmp_path, 
             self.ModelSpace = object()
             self.Layers = Layers()
 
+    startup = SimpleNamespace(Name="Drawing1.dwg", FullName=startup_path, Saved=True,
+                              ModelSpace=SimpleNamespace(Count=0), GetVariable=lambda name: 0)
+
     class Documents:
-        Count = 0
+        Count = int(startup_path is not None)
+
+        def Item(self, index):
+            assert index == 0 and self.Count == 1
+            return startup
 
         def Add(self, path):
             assert path == str(template.resolve())
@@ -102,7 +110,8 @@ def test_acad_new_drawing_preserves_template_layers_and_current_layer(tmp_path, 
 
 
 @pytest.mark.parametrize("absolute", [False, True])
-def test_acad_open_drawing_accepts_writable_document(tmp_path, monkeypatch, absolute) -> None:
+@pytest.mark.parametrize("startup_path", [None, "", "Drawing1.dwg"])
+def test_acad_open_drawing_accepts_writable_document(tmp_path, monkeypatch, absolute, startup_path) -> None:
     managed = tmp_path / "managed"
     target = tmp_path / ("external" if absolute else "managed") / "writable.dwg"
     target.parent.mkdir()
@@ -116,8 +125,15 @@ def test_acad_open_drawing_accepts_writable_document(tmp_path, monkeypatch, abso
             self.ReadOnly = False
             self.ModelSpace = ModelSpace()
 
+    startup = SimpleNamespace(Name="Drawing1.dwg", FullName=startup_path, Saved=True,
+                              ModelSpace=SimpleNamespace(Count=0), GetVariable=lambda name: 0)
+
     class Documents:
-        Count = 0
+        Count = int(startup_path is not None)
+
+        def Item(self, index):
+            assert index == 0 and self.Count == 1
+            return startup
 
         def Open(self, path):
             assert path == str(target.resolve())

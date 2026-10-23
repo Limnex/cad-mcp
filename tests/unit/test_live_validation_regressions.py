@@ -100,22 +100,6 @@ def test_block_arrays_pass_raw_dispatch_pointers(monkeypatch):
     assert values == [pointer]
 
 
-@pytest.mark.parametrize("saved,dbmod,path,protected", [
-    (True, 0, "", True), (True, 0, "Drawing1.dwg", True),
-    (False, 1, "", False), (True, 0, "C:/drawings/blank.dwg", False)])
-def test_untouched_startup_document_is_protected_before_open(saved, dbmod, path, protected):
-    from cad_mcp.drawing.document_guard import assert_safe_document_open
-    from cad_mcp.core.runtime import ConflictError
-    original = SimpleNamespace(Name="Drawing1.dwg", FullName=path, Saved=saved, GetVariable=lambda name: dbmod)
-    app = SimpleNamespace(Documents=SimpleNamespace(Count=1, Item=lambda index: original))
-    if protected:
-        with pytest.raises(ConflictError, match="自动关闭"):
-            assert_safe_document_open(app)
-    else:
-        assert_safe_document_open(app)
-    assert original.Saved == saved and original.FullName == path
-
-
 @pytest.mark.parametrize("corruption", [None, "reference", "property", "precision", "scale"])
 def test_evaluated_attribute_requires_native_code_and_reference_proof(tmp_path, monkeypatch, corruption):
     from cad_mcp.drawing.autocad import AcadBackend

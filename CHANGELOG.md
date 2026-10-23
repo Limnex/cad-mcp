@@ -2,7 +2,8 @@
 
 ## Unreleased
 
-- Fix live-validation failures: probe plot resources in a detached ObjectDBX database, stabilize floating-viewport ownership across DWG reopen, guard untouched unsaved startup drawings, marshal block arrays as raw IDispatch pointers, verify native attribute FIELD dictionaries and source references, and require semantic bindings for template anchor text.
+- Allow creating and opening drawings when an untouched unsaved startup drawing is present; remove the startup-document preflight rejection.
+- Fix live-validation failures: probe plot resources in a detached ObjectDBX database, stabilize floating-viewport ownership across DWG reopen, marshal block arrays as raw IDispatch pointers, verify native attribute FIELD dictionaries and source references, and require semantic bindings for template anchor text.
 - Fit legacy title-block text to separate cells inside the inner frame and use the current date in both backends. Export model PDFs from independently measured display-coordinate bounds with verified window restoration; restore the active document/layout after plotting. Repair the identified AutoCAD metadata-stream defect with an incremental metadata-only replacement that preserves page bytes.
 
 - Add `cad_fillet` for native AutoCAD FILLET on entity pairs and lightweight polylines. Default to read-only preflight; verify actual geometry and radius, restore command settings and temporary views, and report rollback state without saving. Report actual rounded corners when short edges are skipped.
