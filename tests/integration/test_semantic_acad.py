@@ -1,7 +1,8 @@
 """Opt-in strict semantic tests in a separate drawing in already running CAD.
 
 Unexpected failures leave the test document open and stop subsequent CAD writes.
-A separate owned transition document protects untouched startup drawings during reopen.
+Untouched, untitled blank pages may disappear; every other original must stay unchanged.
+A separate owned transition document provides a stable context during reopen.
 Only a completely successful run closes its own test documents.
 """
 
@@ -24,8 +25,6 @@ from cad_mcp.server import _AcadLockProxy
 
 
 pytestmark = pytest.mark.acad
-if os.environ.get("CAD_MCP_RUN_ACAD_INTEGRATION") != "1":
-    pytest.skip("requires explicit authorization and an already running AutoCAD", allow_module_level=True)
 
 
 def _documents(application):
@@ -33,26 +32,86 @@ def _documents(application):
     rows = []
     for index in range(int(documents.Count)):
         document = fresh_com(documents.Item(index))
+        # Layouts contain built-in viewports even in a fresh empty drawing.
+        # Count all paper entities for preservation, but do not mistake those
+        # viewports for actual drawing content when identifying a blank page.
+        paper_entities = paper_content_entities = 0
+        layouts = fresh_com(document.Layouts)
+        for layout_index in range(int(layouts.Count)):
+            layout = fresh_com(layouts.Item(layout_index))
+            if bool(layout.ModelType):
+                continue
+            block = fresh_com(layout.Block)
+            paper_entities += int(block.Count)
+            for entity_index in range(int(block.Count)):
+                entity = fresh_com(block.Item(entity_index))
+                paper_content_entities += str(entity.ObjectName) != "AcDbViewport"
         rows.append({
             "name": str(document.Name),
             "path": str(document.FullName),
             "saved": bool(document.Saved),
             "model_entities": int(fresh_com(document.ModelSpace).Count),
+            "paper_entities": paper_entities,
+            "paper_content_entities": paper_content_entities,
             "dbmod": int(document.GetVariable("DBMOD")),
             "dwgtitled": int(document.GetVariable("DWGTITLED")),
         })
     return sorted(rows, key=lambda row: (row["path"], row["name"]))
 
 
+def _document_key(row):
+    return row["path"].casefold(), row["name"].casefold()
+
+
+def _disposable_blank(row):
+    # Require positive evidence of emptiness. Saved empty DWGs, dirty untitled
+    # drawings, paper-space annotations and incomplete snapshots stay protected.
+    required = {"name", "path", "dwgtitled", "saved", "dbmod", "model_entities",
+                "paper_entities", "paper_content_entities"}
+    return (required <= row.keys() and row.get("dwgtitled") == 0 and row.get("saved") is True
+            and row.get("dbmod") == 0 and row.get("model_entities") == 0
+            and row.get("paper_content_entities") == 0
+            and row.get("path", "").casefold() in ("", row["name"].casefold()))
+
+
 def _document_changes(original, current):
-    observed = {(row["path"].casefold(), row["name"].casefold()): row for row in current}
+    observed = {_document_key(row): row for row in current}
     changes = []
     for before in original:
-        after = observed.get((before["path"].casefold(), before["name"].casefold()))
+        after = observed.get(_document_key(before))
+        if after is None and _disposable_blank(before):
+            continue
         if after != before:
             changes.append({"before": before, "after": after,
                             "reason": "missing" if after is None else "changed"})
     return changes
+
+
+def _final_document_changes(original, current):
+    changes = _document_changes(original, current)
+    original_keys = {_document_key(row) for row in original}
+    # AutoCAD may open another pristine blank page after the last test tab closes.
+    # Any other extra document still indicates a leaked test drawing.
+    changes.extend({"before": None, "after": row, "reason": "unexpected"}
+                   for row in current
+                   if _document_key(row) not in original_keys and not _disposable_blank(row))
+    return changes
+
+
+def _restore_original_active(application, original):
+    if original is None:
+        return False
+    # Resolve a currently open document instead of reusing a possibly closed COM
+    # reference to the original startup page.
+    documents = fresh_com(application.Documents)
+    for index in range(int(documents.Count)):
+        document = fresh_com(documents.Item(index))
+        identity = {"path": str(document.FullName), "name": str(document.Name)}
+        if _document_key(identity) == _document_key(original):
+            document.Activate()
+            return True
+    assert _disposable_blank(original), {"missing_original_active_document": original}
+    return False
 
 
 def _close_identity(raw, expected_path):
@@ -70,6 +129,8 @@ def _close_identity(raw, expected_path):
             "current_path": current, "bound_name": name, "matches": matches}
 
 
+@pytest.mark.skipif(os.environ.get("CAD_MCP_RUN_ACAD_INTEGRATION") != "1",
+                    reason="requires explicit authorization and an already running AutoCAD")
 def test_strict_semantics_against_existing_autocad(tmp_path, monkeypatch):
     raw = AcadBackend(tmp_path)
     cad = _AcadLockProxy(raw)
@@ -181,8 +242,11 @@ def test_strict_semantics_against_existing_autocad(tmp_path, monkeypatch):
         assert connected["semantic_policy"] == "strict", connected
         application = raw.acad
         original_documents = _documents(application)
-        original_active = fresh_com(application.ActiveDocument) if original_documents else None
+        active = fresh_com(application.ActiveDocument) if original_documents else None
+        active_key = _document_key({"path": str(active.FullName), "name": str(active.Name)}) if active is not None else None
+        original_active = next((row for row in original_documents if _document_key(row) == active_key), None)
         evidence["original_documents"] = original_documents
+        evidence["optional_blank_documents"] = [row for row in original_documents if _disposable_blank(row)]
         capture_documents("baseline")
         template, source = raw._resolve_new_drawing_template(application)
         evidence["template"] = {"path": str(template), "source": source}
@@ -315,12 +379,11 @@ def test_strict_semantics_against_existing_autocad(tmp_path, monkeypatch):
         stage("close_only_test_document_and_restore_original_active_document")
         assert str(raw.current_path).casefold() == evidence["drawing_path"].casefold()
         call("cad_close_drawing", {"save": False})
-        if original_active is not None:
-            raw._acquire_autocad_lock()
-            try:
-                original_active.Activate()
-            finally:
-                raw._release_autocad_lock()
+        raw._acquire_autocad_lock()
+        try:
+            evidence["original_active_restored"] = _restore_original_active(application, original_active)
+        finally:
+            raw._release_autocad_lock()
         capture_documents("after:restore_original_active_document")
         stage("close_only_owned_transition_document")
         transition_document = fresh_com(transition_raw.doc)
@@ -343,8 +406,10 @@ def test_strict_semantics_against_existing_autocad(tmp_path, monkeypatch):
         check("owned_transition_document_closed_without_save")
         after_documents = _documents(application)
         evidence["final_documents"] = after_documents
-        assert after_documents == original_documents
-        check("original_documents_counts_paths_and_saved_flags_unchanged")
+        final_changes = _final_document_changes(original_documents, after_documents)
+        evidence["final_document_changes"] = final_changes
+        assert not final_changes, {"final_document_changes": final_changes}
+        check("protected_original_documents_unchanged_and_test_documents_closed")
         evidence["passed"] = True
         evidence["stage"] = "completed"
     except BaseException as exc:
