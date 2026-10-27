@@ -222,10 +222,7 @@ DXF 先检查图案库；AutoCAD 非 SOLID 图案返回
 
 ## 封闭边界实心填充
 
-- `cad_fill_closed_boundary_solid`：DXF 和 AutoCAD 均支持。`boundary_handle` 与 `points` 必须且只能提供一个，`layer`、`associative`、`keep_boundary`、`dry_run` 都必须显式提供；不自动填充任何默认策略。
-- 首次调用应使用 `dry_run=true`，只验证边界闭合、面积、是否自交、保留策略和模式能力，保证零写入。
-- 正式调用创建 `SOLID` HATCH 后立即回读实体类型、图案名、关联性、图层、边界循环数和包围盒；AutoCAD 另回读面积。任一关键字段不一致时删除本次创建对象并触发撤销组回滚。
-- 使用现有边界句柄时强制 `keep_boundary=true`，不会删除用户边界；显式点创建关联填充时也必须保留边界。DXF 当前对已有曲线边界支持闭合直线多段线和圆，含 bulge 的多段线明确停止，不把折线近似当作圆弧。
+- `cad_fill_closed_boundary_solid`：DXF 和 AutoCAD 均支持。`boundary_handle` 与 `points` 两个键都必须出现，只允许一个非 `null`，另一个显式填 `null`；仅省略未选字段会被当前接口判定为缺少参数。`layer`、`associative`、`keep_boundary`、`dry_run` 也必须显式提供，不自动补默认策略。
 
 ## 扩展的原有接口
 
@@ -239,7 +236,7 @@ DXF 先检查图案库；AutoCAD 非 SOLID 图案返回
 
 ### 直接绘图登记与审计
 
-默认 `semantic_policy=strict`，在 `cad_health` 中核对。先调用
+默认 `semantic_policy=strict`；实际工作进程健康结果可核对该字段，初次或繁忙时的主进程缓存诊断可能不含该字段，不据此猜测策略。先调用
 `cad_register_semantic_object`，在 `params.object` 中提供 `project_id`、`object_id`、
 `name`、`object_type`、`source`，可选 `parent_id` 和 `status`；父对象先登记。
 创建图元的调用在 `params.semantic` 中提供 `project_id`、`object_id`、`role` 和可选
@@ -266,7 +263,9 @@ DXF 先检查图案库；AutoCAD 非 SOLID 图案返回
 
 `cad_fill_template_fields` 在严格模式下必须提供 `semantic`，文字锚点新建的图元在同一次撤销组中完成身份绑定。只写属性值时也使用同一明确归属输入。
 
-模板、布局、视口和正式打印工具仅适用于 `acad` 模式：`cad_clone_template_drawing`、`cad_inspect_template_drawing`、`cad_load_template_manifest`、`cad_verify_template_manifest`、`cad_evaluate_template_sheet_scales`、`cad_create_layout`、`cad_insert_template_sheet`、`cad_fill_template_fields`、`cad_create_viewport`、`cad_configure_layout_plot`、`cad_publish_layout_pdf`。
+以下工具仅适用于 `acad`：`cad_clone_template_drawing`、`cad_inspect_template_drawing`、`cad_load_template_manifest`、`cad_create_layout`、`cad_insert_template_sheet`、`cad_fill_template_fields`、`cad_create_viewport`、`cad_configure_layout_plot`、`cad_publish_layout_pdf`，以及完整布局的三个工具。
+
+`cad_verify_template_manifest` 只核验清单和源文件哈希，`cad_evaluate_template_sheet_scales` 只按内容、可用区域和候选比例计算；两者不依赖 AutoCAD 或当前图纸。文件哈希通过不代表图框内容正确，比例计算通过也不代表布局已应用。
 
 模板哈希不匹配、字段锚点缺失、可用区域不足或发布失败时，应停止当前步骤，不得自行重画或替换模板。
 
@@ -277,7 +276,7 @@ DXF 先检查图案库；AutoCAD 非 SOLID 图案返回
 ## 输入与返回
 
 - 所有工具输入拒绝未知字段，数值字段拒绝 `NaN`、正无穷和负无穷；参数校验失败时不得猜测字段或继续写入。
-- 成功响应继续使用原有 JSON 字段，并包含 `ok: true`。
+- 多数成功响应为包含 `ok: true` 的 JSON 文字。`cad_get_drawing_info`、`cad_list_entities`、`cad_check_drawing` 成功时返回纯文本，不含该包装；失败时仍使用结构化错误。`cad_preview_region` 返回标准 MCP 内容块，包含 JSON 文字及可选 PNG 图片。不得对全部成功文字无条件解析 JSON。
 - 工具函数捕获的运行错误返回 `ok: false`、`error` 和 `error_detail`。`error_detail` 包含 `code`、`operation`、`retryable`、`hint`、`request_id`。
 - MCP SDK 在调用工具前发现的参数结构错误可能表现为协议级校验错误，而不是工具函数的 `error_detail`；两种情况都视为未执行写入。
 
@@ -360,3 +359,24 @@ DXF 使用内存文档；AutoCAD 使用 `Document.Export(..., "DXF", SelectionSe
 
 该工具会落盘图片，注解为 `readOnlyHint=false`、`destructiveHint=false`、
 `idempotentHint=false`；遵循现有锁和工作进程超时策略，但不进入实体修改撤销组。
+
+## 全部工具及完整参数
+
+116 个原始工具的用途、模式、返回类别、必填性、默认值和范围见[完整工具参考](../../../docs/api-reference.md)，
+嵌套对象和联合类型见[完整参数结构](../../../docs/tool-schemas.json)。运行时没有统一的输出 Schema；
+检查 `ok` 后还须核对对应 `verified`、`pass`、`readback` 或文件状态。
+
+实心填充的两种合法参数形式如下。第一种需先替换真实句柄；正式创建时再提供已登记的
+`semantic`，此处只展示预检字段组合：
+
+```json
+{"params":{"boundary_handle":"123","points":null,"layer":"FILL","associative":false,"keep_boundary":true,"dry_run":true}}
+```
+
+```json
+{"params":{"boundary_handle":null,"points":[[0,0],[100,0],[100,60],[0,60]],"layer":"FILL","associative":false,"keep_boundary":true,"dry_run":true}}
+```
+
+新建与保存须分模式理解：DXF 首次新建会写出空白文件，后续修改留在内存，须显式保存；
+AutoCAD 新建只生成未保存文档，返回的 `path` 是预定保存位置。重复新建/打开已在 DXF
+会话中的同路径图纸会复用内存状态。不要仅凭 path 字段宣称文件已经落盘。

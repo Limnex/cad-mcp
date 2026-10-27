@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Retain independent DXF drawing sessions and active styles with `cad_list_drawings` / `cad_activate_drawing`; reuse the same open path and require explicit save/discard on close.
+- Guard all public mutations after unknown writes or unverified rollback in both semantic policies. Reconcile supported COM writes after timeout instead of replaying them; include native fillet/chamfer in strict identity transactions and allocate unique identities to new entities.
+- Redact validation exceptions and stack metadata from controlled logs; refresh the environment model example and verify it through public validation/preview calls.
+- Fix line-pair FILLET at extreme viewport zoom by temporarily focusing the pick region and independently verifying view restoration on success and failure. Add offline and owned-unsaved-document live regressions.
+- Resolve the eight documentation findings: required-null fill inputs, plain-text success exceptions, cached health-field boundaries, backend-independent template checks, complete tool/parameter coverage, honest test isolation, unsaved AutoCAD creation, and current engineering model references. Generate the 116-tool reference and complete input schemas from runtime definitions; add synchronization checks and document remaining verification gaps.
+
 - Allow creating and opening drawings when an untouched unsaved startup drawing is present; remove the startup-document preflight rejection.
 - Fix live-validation failures: probe plot resources in a detached ObjectDBX database, stabilize floating-viewport ownership across DWG reopen, marshal block arrays as raw IDispatch pointers, verify native attribute FIELD dictionaries and source references, and require semantic bindings for template anchor text.
 - Fit legacy title-block text to separate cells inside the inner frame and use the current date in both backends. Export model PDFs from independently measured display-coordinate bounds with verified window restoration; restore the active document/layout after plotting. Repair the identified AutoCAD metadata-stream defect with an incremental metadata-only replacement that preserves page bytes.

@@ -319,7 +319,7 @@ class PreviewRegionInput(ToolInput):
     y_max: float = Field(ge=-1e12, le=1e12, description="WCS XY 右上角 Y，须大于 y_min")
     width: int = Field(default=1200, ge=64, le=2048, description="PNG 宽度，像素")
     height: int = Field(default=800, ge=64, le=2048, description="PNG 高度，像素")
-    background: Literal["white", "black"] = "white"
+    background: Literal["white", "black"] = Field(default="white", description="预览背景颜色；white 为白底，black 为黑底")
     include_image: bool = Field(default=True, description="默认同时返回图片和绝对路径；客户端不支持图片时可设 false 仅返回路径")
 
     @model_validator(mode="after")
@@ -392,7 +392,8 @@ def cad_new_drawing(params: NewDrawingInput) -> str:
         params (NewDrawingInput): filename 为图纸文件名；template_path 为可选 DWT 路径。
 
     Returns:
-        str: JSON，含保存路径。图纸保存在 CAD 图纸目录。
+        str: JSON，含 path 及模式信息。DXF 首次新建会立即保存空白文件；
+        acad 只创建未保存文档，path 为预定保存位置，须显式保存才落盘。
     """
     try:
         result = _get_backend().new_drawing(params.filename, params.template_path)
@@ -928,7 +929,7 @@ class FillClosedBoundarySolidInput(SemanticToolInput):
         min_length=3,
         max_length=1_000,
     )
-    layer: str = Field(min_length=1, max_length=255)
+    layer: str = Field(min_length=1, max_length=255, description="目标图层名称；允许 null 时沿用当前图层或工具规定的默认图层")
     associative: bool = Field(description="是否关联边界，必须显式指定")
     keep_boundary: bool = Field(description="是否保留边界，必须显式指定")
     dry_run: bool = Field(description="必须先用 true 预览；false 才实际写入")
@@ -1900,7 +1901,7 @@ class DeleteEntityInput(ToolInput):
     },
 )
 def cad_delete_entity(params: DeleteEntityInput) -> str:
-    """删除指定句柄的图元（破坏性操作，删除后不可恢复）。
+    """删除指定句柄的图元；属于破坏性写入，须先确认对象，不自动保存。
 
     Args:
         params (DeleteEntityInput): 图元句柄。
@@ -2099,15 +2100,15 @@ def cad_make_block(params: MakeBlockInput) -> str:
 
 
 class BlockFieldBindingInput(ToolInput):
-    attribute_tag: str = Field(min_length=1, max_length=255)
-    source_type: Literal["object"] = "object"
-    source_handle: str = Field(min_length=1, max_length=40)
-    source_property: str = Field(min_length=1, max_length=80)
-    linear_scale_factor: float = Field(default=1.0, gt=0, le=1000000)
-    precision: int = Field(default=3, ge=0, le=8)
-    prefix: str = Field(default="", max_length=80)
-    suffix: str = Field(default="", max_length=80)
-    update_on_regen: bool = True
+    attribute_tag: str = Field(min_length=1, max_length=255, description="块中真实存在的属性标签")
+    source_type: Literal["object"] = Field(default="object", description="字段来源类别，按枚举选择对象属性、坐标或标高")
+    source_handle: str = Field(min_length=1, max_length=40, description="关联来源实体的十进制句柄，须在当前图纸中存在")
+    source_property: str = Field(min_length=1, max_length=80, description="来源对象的可关联属性名称，须能由 AutoCAD 字段读取")
+    linear_scale_factor: float = Field(default=1.0, gt=0, le=1000000, description="字段显示值的长度换算因子；只改显示，不缩放几何")
+    precision: int = Field(default=3, ge=0, le=8, description="显示小数位数，不代表工程计算精度")
+    prefix: str = Field(default="", max_length=80, description="显示数值前的文字")
+    suffix: str = Field(default="", max_length=80, description="显示数值后的文字")
+    update_on_regen: bool = Field(default=True, description="是否要求字段在 AutoCAD REGEN 后更新，必须回读验证关联")
 
 
 class InsertBlockInput(SemanticToolInput):
@@ -2123,10 +2124,10 @@ class InsertBlockInput(SemanticToolInput):
         description="使用 source_path 时必填；绑定已经检查过的块库 SHA-256")
     attributes: Dict[str, str] = Field(default_factory=dict, max_length=256, description="属性标签到值的映射")
     layer: Optional[str] = Field(default=None, description="块引用所在图层；留空使用当前层", max_length=255)
-    x_scale: Optional[float] = Field(default=None, gt=0, le=1000)
-    y_scale: Optional[float] = Field(default=None, gt=0, le=1000)
-    z_scale: Optional[float] = Field(default=None, gt=0, le=1000)
-    field_bindings: List[BlockFieldBindingInput] = Field(default_factory=list, max_length=256)
+    x_scale: Optional[float] = Field(default=None, gt=0, le=1000, description="X 方向比例；null 时使用统一 scale")
+    y_scale: Optional[float] = Field(default=None, gt=0, le=1000, description="Y 方向比例；null 时使用统一 scale")
+    z_scale: Optional[float] = Field(default=None, gt=0, le=1000, description="Z 方向比例；null 时使用统一 scale")
+    field_bindings: List[BlockFieldBindingInput] = Field(default_factory=list, max_length=256, description="块属性关联字段列表；字段关联仅 acad 支持，须核对来源句柄和属性")
     replace_existing: bool = Field(default=False, description="导入 source_path 时是否替换未被引用的同名定义")
 
     @model_validator(mode="after")
@@ -2575,7 +2576,7 @@ def cad_draw_table(params: DrawTableInput) -> str:
 
 class LoadDraftingProfileInput(ToolInput):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-    path: str = Field(min_length=1, max_length=1000)
+    path: str = Field(min_length=1, max_length=1000, description="待加载 UTF-8 JSON 文件的完整路径；以加载返回的绝对路径和哈希为准")
 
 
 @_tool(
@@ -2618,7 +2619,7 @@ def cad_list_drafting_profiles(params: ListDraftingProfilesInput) -> str:
 
 class LoadEnvironmentRuleSetInput(ToolInput):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-    path: str = Field(min_length=1, max_length=1000)
+    path: str = Field(min_length=1, max_length=1000, description="待加载 UTF-8 JSON 文件的完整路径；以加载返回的绝对路径和哈希为准")
 
 
 @_tool(
@@ -2659,10 +2660,10 @@ def cad_list_environment_rule_sets(params: ListEnvironmentRuleSetsInput) -> str:
 
 class ValidateEnvironmentModelInput(ToolInput):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-    model: EnvironmentModel
-    drafting_profile_id: Optional[str] = None
-    rule_set_ids: List[str] = Field(default_factory=list, max_length=64)
-    rules: List[RuleDefinition] = Field(default_factory=list, max_length=256)
+    model: EnvironmentModel = Field(description="完整环境工程模型；必含项目标识、项目名称，通过稳定 ID 引用设施、网络、视图和表格")
+    drafting_profile_id: Optional[str] = Field(default=None, description="已加载的制图配置 ID；null 时使用该工作流的默认配置")
+    rule_set_ids: List[str] = Field(default_factory=list, max_length=64, description="本进程已加载的外部规则集 ID 列表；空列表不附加外部规则集")
+    rules: List[RuleDefinition] = Field(default_factory=list, max_length=256, description="本次请求附加的声明式规则列表，不替代工程计算或规范判定")
 
     @model_validator(mode="after")
     def validate_inline_rules(self):
@@ -2692,14 +2693,14 @@ def cad_validate_environment_model(params: ValidateEnvironmentModelInput) -> str
 
 class PreviewEnvironmentDrawingInput(ToolInput):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-    model: EnvironmentModel
-    view_ids: Optional[List[str]] = Field(default=None, max_length=1_000)
-    include_schedules: bool = True
-    include_operations: bool = False
-    operation_limit: int = Field(default=100, ge=1, le=2000)
-    drafting_profile_id: Optional[str] = None
-    rule_set_ids: List[str] = Field(default_factory=list, max_length=64)
-    rules: List[RuleDefinition] = Field(default_factory=list, max_length=256)
+    model: EnvironmentModel = Field(description="完整环境工程模型；必含项目标识、项目名称，通过稳定 ID 引用设施、网络、视图和表格")
+    view_ids: Optional[List[str]] = Field(default=None, max_length=1_000, description="只处理这些视图 ID；null 表示处理模型声明的全部视图")
+    include_schedules: bool = Field(default=True, description="是否将模型声明的表格编译进计划")
+    include_operations: bool = Field(default=False, description="是否在预览结果中列出具体操作；不影响计划计算")
+    operation_limit: int = Field(default=100, ge=1, le=2000, description="预览中最多返回的操作条数，不是正式绘制数量上限")
+    drafting_profile_id: Optional[str] = Field(default=None, description="已加载的制图配置 ID；null 时使用该工作流的默认配置")
+    rule_set_ids: List[str] = Field(default_factory=list, max_length=64, description="本进程已加载的外部规则集 ID 列表；空列表不附加外部规则集")
+    rules: List[RuleDefinition] = Field(default_factory=list, max_length=256, description="本次请求附加的声明式规则列表，不替代工程计算或规范判定")
 
     @model_validator(mode="after")
     def validate_inline_rules(self):
@@ -2747,17 +2748,17 @@ def cad_preview_environment_drawing(params: PreviewEnvironmentDrawingInput) -> s
 
 class ApplyEnvironmentDrawingInput(ToolInput):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-    model: EnvironmentModel
-    view_ids: Optional[List[str]] = Field(default=None, max_length=1_000)
-    include_schedules: bool = True
-    policy: Literal["create_only", "update_managed", "replace_scope"] = "update_managed"
+    model: EnvironmentModel = Field(description="完整环境工程模型；必含项目标识、项目名称，通过稳定 ID 引用设施、网络、视图和表格")
+    view_ids: Optional[List[str]] = Field(default=None, max_length=1_000, description="只处理这些视图 ID；null 表示处理模型声明的全部视图")
+    include_schedules: bool = Field(default=True, description="是否将模型声明的表格编译进计划")
+    policy: Literal["create_only", "update_managed", "replace_scope"] = Field(default="update_managed", description="同步策略：create_only 仅创建，update_managed 更新受管且未被人工修改的对象，replace_scope 替换明确范围")
     dry_run: bool = Field(
         default=True,
         description="默认只返回差异；显式设为 false 才在一个后端事务中写入",
     )
-    drafting_profile_id: Optional[str] = None
-    rule_set_ids: List[str] = Field(default_factory=list, max_length=64)
-    rules: List[RuleDefinition] = Field(default_factory=list, max_length=256)
+    drafting_profile_id: Optional[str] = Field(default=None, description="已加载的制图配置 ID；null 时使用该工作流的默认配置")
+    rule_set_ids: List[str] = Field(default_factory=list, max_length=64, description="本进程已加载的外部规则集 ID 列表；空列表不附加外部规则集")
+    rules: List[RuleDefinition] = Field(default_factory=list, max_length=256, description="本次请求附加的声明式规则列表，不替代工程计算或规范判定")
 
     @model_validator(mode="after")
     def validate_inline_rules(self):
@@ -2843,7 +2844,7 @@ def cad_apply_environment_drawing(params: ApplyEnvironmentDrawingInput) -> str:
 
 
 class RegisterSemanticObjectInput(ToolInput):
-    object: SemanticObject
+    object: SemanticObject = Field(description="待登记的真实工程对象；包含项目、对象编号、名称、类型和来源")
 
 
 @_tool(name="cad_register_semantic_object", annotations={
@@ -2895,6 +2896,7 @@ class ListManagedEntitiesInput(ToolInput):
                  "openWorldHint": False},
 )
 def cad_list_managed_entities(params: ListManagedEntitiesInput) -> str:
+    """列出当前图纸的受管实体、语义 ID、操作哈希及状态；只读，不自动修复。"""
     try:
         records = _get_backend().list_managed_entities()
         return _ok({"ok": True, "count": len(records),
@@ -2907,14 +2909,15 @@ def cad_list_managed_entities(params: ListManagedEntitiesInput) -> str:
 
 class SaveAsInput(ToolInput):
     model_config = ConfigDict(str_strip_whitespace=True)
-    filename: str = Field(min_length=1, max_length=180)
-    overwrite: bool = False
+    filename: str = Field(min_length=1, max_length=180, description="输出文件名，写入受控图纸目录；扩展名必须符合所用工具")
+    overwrite: bool = Field(default=False, description="是否允许覆盖已有目标文件；默认禁止覆盖")
 
 
 @_tool(name="cad_save_as", annotations={"title": "另存当前图纸",
            "readOnlyHint": False, "destructiveHint": False,
            "idempotentHint": False, "openWorldHint": False})
 def cad_save_as(params: SaveAsInput) -> str:
+    """将当前图纸另存到受控目录，默认拒绝覆盖；返回实际保存路径。"""
     try:
         return _ok({"ok": True, **_get_backend().save_as(params.filename, params.overwrite)})
     except Exception as e:
@@ -2928,13 +2931,14 @@ class CloneTemplateDrawingInput(ToolInput):
     expected_sha256: str = Field(
         pattern=r"^[0-9a-fA-F]{64}$",
         description="必须与 cad_inspect_template_drawing 返回的 source_sha256 一致")
-    overwrite: bool = False
+    overwrite: bool = Field(default=False, description="是否允许覆盖已有目标文件；默认禁止覆盖")
 
 
 @_tool(name="cad_clone_template_drawing", annotations={"title": "从 DWG 模板创建工作副本",
            "readOnlyHint": False, "destructiveHint": False,
            "idempotentHint": False, "openWorldHint": False})
 def cad_clone_template_drawing(params: CloneTemplateDrawingInput) -> str:
+    """按预期哈希核验并克隆只读 DWG 模板为工作副本；仅 acad 支持。"""
     try:
         return _ok({"ok": True, **_get_backend().clone_template_drawing(
             params.source_path, params.output_filename,
@@ -2953,6 +2957,7 @@ class InspectTemplateDrawingInput(ToolInput):
            "title": "只读检查 DWG 模板资产", "readOnlyHint": True,
            "destructiveHint": False, "idempotentHint": True, "openWorldHint": False})
 def cad_inspect_template_drawing(params: InspectTemplateDrawingInput) -> str:
+    """只读检查源 DWG 的哈希、单位和模板资产；仅 acad 支持，不保存源文件。"""
     try:
         backend = _get_backend()
         if not hasattr(backend, "inspect_template_drawing"):
@@ -2964,13 +2969,14 @@ def cad_inspect_template_drawing(params: InspectTemplateDrawingInput) -> str:
 
 class TemplateManifestPathInput(ToolInput):
     model_config = ConfigDict(str_strip_whitespace=True)
-    manifest_path: str = Field(min_length=1, max_length=1000)
+    manifest_path: str = Field(min_length=1, max_length=1000, description="图框模板清单 JSON 文件路径；相对源文件路径按清单目录解析")
 
 
 @_tool(name="cad_verify_template_manifest", annotations={"title": "核验模板清单和源 DWG",
            "readOnlyHint": True, "destructiveHint": False,
            "idempotentHint": True, "openWorldHint": False})
 def cad_verify_template_manifest(params: TemplateManifestPathInput) -> str:
+    """按清单核验源文件存在性与 SHA-256；不连接 CAD，不证明图框内容正确。"""
     try:
         manifest = load_template_manifest(params.manifest_path)
         return _ok({"ok": True, "template_id": manifest.template_id,
@@ -2984,6 +2990,7 @@ def cad_verify_template_manifest(params: TemplateManifestPathInput) -> str:
            "readOnlyHint": True, "destructiveHint": False,
            "idempotentHint": True, "openWorldHint": False})
 def cad_load_template_manifest(params: TemplateManifestPathInput) -> str:
+    """加载并核验 DWG 模板清单到 acad 后端缓存；不插入图框。"""
     try:
         backend = _get_backend()
         if not hasattr(backend, "load_template_manifest"):
@@ -2995,18 +3002,19 @@ def cad_load_template_manifest(params: TemplateManifestPathInput) -> str:
 
 class EvaluateTemplateSheetScalesInput(ToolInput):
     model_config = ConfigDict(str_strip_whitespace=True)
-    manifest_path: str = Field(min_length=1, max_length=1000)
-    sheet_id: str = Field(min_length=1, max_length=120)
-    content_bounds: Tuple[float, float, float, float]
-    candidate_denominators: List[float] = Field(min_length=1, max_length=100)
-    annotation_padding_model: float = Field(default=0, ge=0)
-    model_mm_per_unit: float = Field(default=1.0, gt=0, le=1e9)
+    manifest_path: str = Field(min_length=1, max_length=1000, description="图框模板清单 JSON 文件路径；相对源文件路径按清单目录解析")
+    sheet_id: str = Field(min_length=1, max_length=120, description="模板清单中已声明的图幅 ID")
+    content_bounds: Tuple[float, float, float, float] = Field(description="模型内容范围 [xmin,ymin,xmax,ymax]；使用模型坐标，不是纸面毫米")
+    candidate_denominators: List[float] = Field(min_length=1, max_length=100, description="待逐一核算的正比例分母列表，例如 50 表示 1:50；工具不替用户选择")
+    annotation_padding_model: float = Field(default=0, ge=0, description="范围四周预留的标注空间，单位与模型坐标一致")
+    model_mm_per_unit: float = Field(default=1.0, gt=0, le=1e9, description="每一模型单位对应的毫米数；毫米模型为 1，米模型为 1000")
 
 
 @_tool(name="cad_evaluate_template_sheet_scales", annotations={
            "title": "按固定模板图框校核比例", "readOnlyHint": True,
            "destructiveHint": False, "idempotentHint": True, "openWorldHint": False})
 def cad_evaluate_template_sheet_scales(params: EvaluateTemplateSheetScalesInput) -> str:
+    """按模板有效区域、内容范围和候选比例计算适配情况；不连接 CAD，也不替用户选择比例。"""
     try:
         manifest = load_template_manifest(params.manifest_path)
         sheet = next((item for item in manifest.sheets if item.id == params.sheet_id), None)
@@ -3021,14 +3029,15 @@ def cad_evaluate_template_sheet_scales(params: EvaluateTemplateSheetScalesInput)
 
 class CreateLayoutInput(SemanticToolInput):
     model_config = ConfigDict(str_strip_whitespace=True)
-    name: str = Field(min_length=1, max_length=120)
-    replace: bool = False
+    name: str = Field(min_length=1, max_length=120, description="待创建或更新的资源名称，须符合后端命名规则")
+    replace: bool = Field(default=False, description="是否允许替换同名资源；默认保留已有资源")
 
 
 @_tool(name="cad_create_layout", annotations={"title": "创建纸空间布局",
            "readOnlyHint": False, "destructiveHint": True,
            "idempotentHint": True, "openWorldHint": False})
 def cad_create_layout(params: CreateLayoutInput) -> str:
+    """在 acad 中创建纸空间布局；替换同名布局须显式开启 replace，不自动保存。"""
     try:
         backend = _get_backend()
         if not hasattr(backend, "create_layout"):
@@ -3040,17 +3049,18 @@ def cad_create_layout(params: CreateLayoutInput) -> str:
 
 class InsertTemplateSheetInput(SemanticToolInput):
     model_config = ConfigDict(str_strip_whitespace=True)
-    template_id: str
-    sheet_id: str
-    layout_name: str
-    x: float = 0
-    y: float = 0
+    template_id: str = Field(description="已加载的模板标识，与模板清单中的 template_id 一致")
+    sheet_id: str = Field(description="模板清单中已声明的图幅 ID")
+    layout_name: str = Field(description="目标纸空间布局名称；不能将 Model 当作纸空间布局")
+    x: float = Field(default=0, description="插入点 X 坐标；模板插入使用纸空间坐标，多行文字使用模型坐标")
+    y: float = Field(default=0, description="插入点 Y 坐标；模板插入使用纸空间坐标，多行文字使用模型坐标")
 
 
 @_tool(name="cad_insert_template_sheet", annotations={"title": "插入原始模板图框",
            "readOnlyHint": False, "destructiveHint": False,
            "idempotentHint": False, "openWorldHint": False})
 def cad_insert_template_sheet(params: InsertTemplateSheetInput) -> str:
+    """将已加载清单中的固定图框插入指定 acad 布局，按真实范围回读验证。"""
     try:
         backend = _get_backend()
         if not hasattr(backend, "insert_template_sheet"):
@@ -3063,17 +3073,18 @@ def cad_insert_template_sheet(params: InsertTemplateSheetInput) -> str:
 
 class FillTemplateFieldsInput(SemanticToolInput):
     model_config = ConfigDict(str_strip_whitespace=True)
-    template_id: str
-    sheet_id: str
-    layout_name: str
-    values: Dict[str, Any] = Field(max_length=256)
-    layer: str = "ENV-ANNO"
+    template_id: str = Field(description="已加载的模板标识，与模板清单中的 template_id 一致")
+    sheet_id: str = Field(description="模板清单中已声明的图幅 ID")
+    layout_name: str = Field(description="目标纸空间布局名称；不能将 Model 当作纸空间布局")
+    values: Dict[str, Any] = Field(max_length=256, description="字段名或属性标签到待填写值的映射；按当前模板或块的真实标签填写")
+    layer: str = Field(default="ENV-ANNO", description="目标图层名称；允许 null 时沿用当前图层或工具规定的默认图层")
 
 
 @_tool(name="cad_fill_template_fields", annotations={"title": "填写模板标题栏字段",
            "readOnlyHint": False, "destructiveHint": False,
            "idempotentHint": False, "openWorldHint": False})
 def cad_fill_template_fields(params: FillTemplateFieldsInput) -> str:
+    """填写模板属性或锚点文字，严格模式须传 semantic；仅 acad，不自动保存。"""
     try:
         backend = _get_backend()
         if not hasattr(backend, "fill_template_fields"):
@@ -3090,7 +3101,7 @@ class PreviewSheetLayoutInput(LayoutRequest, ToolInput):
 
 
 class ApplySheetLayoutInput(LayoutRequest, SemanticToolInput):
-    confirmation_token: str = Field(min_length=1, max_length=200)
+    confirmation_token: str = Field(min_length=1, max_length=200, description="同参数、同目标状态的预览返回的确认令牌；状态改变或过期后重新预览")
 
 
 class ValidateSheetLayoutInput(LayoutRequest, ToolInput):
@@ -3138,22 +3149,23 @@ def cad_validate_sheet_layout(params: ValidateSheetLayoutInput) -> str:
 
 class CreateViewportInput(SemanticToolInput):
     model_config = ConfigDict(str_strip_whitespace=True)
-    layout_name: str
-    center_x: float
-    center_y: float
-    width: float = Field(gt=0)
-    height: float = Field(gt=0)
-    model_center_x: float
-    model_center_y: float
-    scale_denominator: float = Field(gt=0)
-    lock: bool = True
-    model_mm_per_unit: float = Field(default=1.0, gt=0, le=1e9)
+    layout_name: str = Field(description="目标纸空间布局名称；不能将 Model 当作纸空间布局")
+    center_x: float = Field(description="视口中心的纸空间 X 坐标，毫米")
+    center_y: float = Field(description="视口中心的纸空间 Y 坐标，毫米")
+    width: float = Field(gt=0, description="视口的纸面宽度或多行文字的排版宽度，须为正数")
+    height: float = Field(gt=0, description="视口的纸面高度或文字字高；允许 null 的文字高度沿用当前样式")
+    model_center_x: float = Field(description="视口显示的模型中心 WCS X 坐标")
+    model_center_y: float = Field(description="视口显示的模型中心 WCS Y 坐标")
+    scale_denominator: float = Field(gt=0, description="比例分母；视口 100 表示 1:100，自定义打印比例须结合分子")
+    lock: bool = Field(default=True, description="创建后是否锁定视口比例和视图")
+    model_mm_per_unit: float = Field(default=1.0, gt=0, le=1e9, description="每一模型单位对应的毫米数；毫米模型为 1，米模型为 1000")
 
 
 @_tool(name="cad_create_viewport", annotations={"title": "创建并锁定布局视口",
            "readOnlyHint": False, "destructiveHint": False,
            "idempotentHint": False, "openWorldHint": False})
 def cad_create_viewport(params: CreateViewportInput) -> str:
+    """在 acad 纸空间创建模型视口并设置中心、比例和锁定状态；不自动保存。"""
     try:
         backend = _get_backend()
         if not hasattr(backend, "create_viewport"):
@@ -3169,20 +3181,20 @@ def cad_create_viewport(params: CreateViewportInput) -> str:
 
 class ConfigureLayoutPlotInput(ToolInput):
     model_config = ConfigDict(str_strip_whitespace=True)
-    layout_name: str
-    media_name: str
-    style_sheet: str = "monochrome.ctb"
-    device: str = "DWG To PDF.pc3"
-    rotation: Literal[0, 90, 180, 270] = 0
-    plot_type: Literal["display", "extents", "limits", "view", "window", "layout"] = "layout"
-    paper_units: Literal["millimeters", "inches", "pixels"] = "millimeters"
-    scale_mode: Literal["standard", "custom", "fit"] = "standard"
-    scale_numerator: Optional[float] = Field(default=None, gt=0, le=1000000)
-    scale_denominator: Optional[float] = Field(default=None, gt=0, le=1000000)
-    center_plot: bool = False
-    plot_with_lineweights: bool = True
-    plot_with_plot_styles: bool = True
-    apply_named_page_setup: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    layout_name: str = Field(description="目标纸空间布局名称；不能将 Model 当作纸空间布局")
+    media_name: str = Field(description="当前设备实际列出的介质名称，不根据纸张尺寸猜名称")
+    style_sheet: str = Field(default="monochrome.ctb", description="当前 AutoCAD 可用的 CTB 或 STB 打印样式表名称")
+    device: str = Field(default="DWG To PDF.pc3", description="当前 AutoCAD 实际存在的打印设备或 PC3 名称")
+    rotation: Literal[0, 90, 180, 270] = Field(default=0, description="旋转角度，单位为度；布局打印仅接受其枚举列出的方向")
+    plot_type: Literal["display", "extents", "limits", "view", "window", "layout"] = Field(default="layout", description="打印范围类型，按字段枚举选择；布局工作流使用 layout")
+    paper_units: Literal["millimeters", "inches", "pixels"] = Field(default="millimeters", description="打印纸张单位，不改变模型坐标单位")
+    scale_mode: Literal["standard", "custom", "fit"] = Field(default="standard", description="打印比例方式：standard 标准比例、custom 自定义分子分母、fit 适合纸张")
+    scale_numerator: Optional[float] = Field(default=None, gt=0, le=1000000, description="自定义打印比例分子；与分母同时提供")
+    scale_denominator: Optional[float] = Field(default=None, gt=0, le=1000000, description="比例分母；视口 100 表示 1:100，自定义打印比例须结合分子")
+    center_plot: bool = Field(default=False, description="是否启用打印居中，布局打印按实际可支持的方式回读")
+    plot_with_lineweights: bool = Field(default=True, description="是否按对象或图层线宽打印")
+    plot_with_plot_styles: bool = Field(default=True, description="是否使用指定打印样式表")
+    apply_named_page_setup: Optional[str] = Field(default=None, min_length=1, max_length=255, description="先应用此已存在的命名页面设置；null 时不复制页面设置")
 
     @model_validator(mode="after")
     def validate_custom_scale(self):
@@ -3197,6 +3209,7 @@ class ConfigureLayoutPlotInput(ToolInput):
            "readOnlyHint": False, "destructiveHint": False,
            "idempotentHint": True, "openWorldHint": False})
 def cad_configure_layout_plot(params: ConfigureLayoutPlotInput) -> str:
+    """设置 acad 布局的实际设备、介质、样式表和打印比例，并回读结果。"""
     try:
         backend = _get_backend()
         if not hasattr(backend, "configure_layout_plot"):
@@ -3214,14 +3227,15 @@ def cad_configure_layout_plot(params: ConfigureLayoutPlotInput) -> str:
 
 class PublishLayoutPdfInput(ToolInput):
     model_config = ConfigDict(str_strip_whitespace=True)
-    layout_name: str
-    filename: str
+    layout_name: str = Field(description="目标纸空间布局名称；不能将 Model 当作纸空间布局")
+    filename: str = Field(description="输出文件名，写入受控图纸目录；扩展名必须符合所用工具")
 
 
 @_tool(name="cad_publish_layout_pdf", annotations={"title": "按布局发布 PDF",
            "readOnlyHint": False, "destructiveHint": False,
            "idempotentHint": False, "openWorldHint": False})
 def cad_publish_layout_pdf(params: PublishLayoutPdfInput) -> str:
+    """将指定 acad 布局发布为 PDF；会创建文件，需事先核验页面设置及输出路径。"""
     try:
         backend = _get_backend()
         if not hasattr(backend, "publish_layout_pdf"):
@@ -3234,19 +3248,20 @@ def cad_publish_layout_pdf(params: PublishLayoutPdfInput) -> str:
 
 class DrawMTextInput(SemanticToolInput):
     model_config = ConfigDict(str_strip_whitespace=True)
-    text: str = Field(min_length=1, max_length=10000)
-    x: float
-    y: float
-    width: float = Field(gt=0)
-    height: Optional[float] = Field(default=None, gt=0)
-    rotation: float = Field(default=0, ge=-360, le=360)
-    layer: Optional[str] = None
+    text: str = Field(min_length=1, max_length=10000, description="多行文字内容；保留用户明确提供的文字和格式")
+    x: float = Field(description="插入点 X 坐标；模板插入使用纸空间坐标，多行文字使用模型坐标")
+    y: float = Field(description="插入点 Y 坐标；模板插入使用纸空间坐标，多行文字使用模型坐标")
+    width: float = Field(gt=0, description="视口的纸面宽度或多行文字的排版宽度，须为正数")
+    height: Optional[float] = Field(default=None, gt=0, description="视口的纸面高度或文字字高；允许 null 的文字高度沿用当前样式")
+    rotation: float = Field(default=0, ge=-360, le=360, description="旋转角度，单位为度；布局打印仅接受其枚举列出的方向")
+    layer: Optional[str] = Field(default=None, description="目标图层名称；允许 null 时沿用当前图层或工具规定的默认图层")
 
 
 @_tool(name="cad_draw_mtext", annotations={"title": "绘制原生多行文字",
            "readOnlyHint": False, "destructiveHint": False,
            "idempotentHint": False, "openWorldHint": False})
 def cad_draw_mtext(params: DrawMTextInput) -> str:
+    """创建原生多行文字；提供排版宽度、字高、旋转及语义归属，不自动保存图纸。"""
     try:
         result = _get_backend().draw_mtext(
             params.text, params.x, params.y, params.width, params.height,
@@ -3264,15 +3279,15 @@ def _required_v2_profile(path: str) -> tuple[DraftingProfileV2, Dict[str, Any]]:
 
 
 class SetDrawingSettingsInput(ToolInput):
-    insertion_units: Literal["millimeters"] = "millimeters"
-    measurement_system: Literal["metric"] = "metric"
-    linear_unit_format: Literal["decimal"] = "decimal"
-    linear_precision: int = Field(default=2, ge=0, le=8)
-    angular_unit_format: Literal["decimal_degrees"] = "decimal_degrees"
-    angular_precision: int = Field(default=2, ge=0, le=8)
-    associative_dimensions: bool = True
-    mirror_text: bool = False
-    display_lineweights: bool = True
+    insertion_units: Literal["millimeters"] = Field(default="millimeters", description="插入单位；当前图纸环境接口只接受 millimeters")
+    measurement_system: Literal["metric"] = Field(default="metric", description="测量环境；当前只接受公制 metric")
+    linear_unit_format: Literal["decimal"] = Field(default="decimal", description="长度显示格式；当前只接受 decimal")
+    linear_precision: int = Field(default=2, ge=0, le=8, description="长度显示的小数位数，不改变实际几何精度")
+    angular_unit_format: Literal["decimal_degrees"] = Field(default="decimal_degrees", description="角度显示格式；当前只接受 decimal_degrees")
+    angular_precision: int = Field(default=2, ge=0, le=8, description="角度显示的小数位数")
+    associative_dimensions: bool = Field(default=True, description="是否启用关联尺寸系统设置；不证明已有尺寸已建立关联")
+    mirror_text: bool = Field(default=False, description="镜像操作时是否同时镜像文字方向")
+    display_lineweights: bool = Field(default=True, description="是否在画面显示线宽，不等于打印线宽开关")
 
 
 @_tool(name="cad_set_drawing_settings", annotations={"title": "设置 DWT 图纸环境",
@@ -3310,6 +3325,7 @@ class ListLayoutsDetailedInput(ToolInput):
            "readOnlyHint": True, "destructiveHint": False,
            "idempotentHint": True, "openWorldHint": False})
 def cad_list_layouts_detailed(params: ListLayoutsDetailedInput) -> str:
+    """只读列出布局和可核实的打印设置；无法读取的字段保持未验证。"""
     try:
         return _ok({"ok": True, **_get_backend().list_layouts_detailed()})
     except Exception as e:
@@ -3339,6 +3355,7 @@ class ListPageSetupsInput(ToolInput):
            "readOnlyHint": True, "destructiveHint": False,
            "idempotentHint": True, "openWorldHint": False})
 def cad_list_page_setups(params: ListPageSetupsInput) -> str:
+    """只读列出命名页面设置；DXF 无法可靠枚举时返回 unverified_fields。"""
     try:
         return _ok({"ok": True, **_get_backend().list_page_setups()})
     except Exception as e:
@@ -3346,15 +3363,16 @@ def cad_list_page_setups(params: ListPageSetupsInput) -> str:
 
 
 class ConvertPlotStyleModeInput(ToolInput):
-    target_mode: Literal["ctb", "stb"]
-    expected_current_mode: Optional[Literal["ctb", "stb"]] = None
-    dry_run: bool = True
+    target_mode: Literal["ctb", "stb"] = Field(description="目标打印样式模式：ctb 或 stb")
+    expected_current_mode: Optional[Literal["ctb", "stb"]] = Field(default=None, description="预期当前打印样式模式；null 不附加该前置断言")
+    dry_run: bool = Field(default=True, description="true 只预检或返回计划，false 才正式执行；预览不保证原生操作或资源必定可用")
 
 
 @_tool(name="cad_convert_plot_style_mode", annotations={"title": "检查或转换 CTB/STB 模式",
            "readOnlyHint": False, "destructiveHint": True,
            "idempotentHint": True, "openWorldHint": False})
 def cad_convert_plot_style_mode(params: ConvertPlotStyleModeInput) -> str:
+    """预检或请求 CTB/STB 转换；仅 acad，当前无法可靠执行时明确返回不支持。"""
     try:
         result = _get_backend().convert_plot_style_mode(
             params.target_mode, params.expected_current_mode, dry_run=params.dry_run
@@ -3365,14 +3383,15 @@ def cad_convert_plot_style_mode(params: ConvertPlotStyleModeInput) -> str:
 
 
 class RenameLayoutInput(ToolInput):
-    old_name: str = Field(min_length=1, max_length=255)
-    new_name: str = Field(min_length=1, max_length=255)
+    old_name: str = Field(min_length=1, max_length=255, description="待改名的现有图层或布局名称")
+    new_name: str = Field(min_length=1, max_length=255, description="新名称；已有同名或受保护对象会被拒绝")
 
 
 @_tool(name="cad_rename_layout", annotations={"title": "重命名布局",
            "readOnlyHint": False, "destructiveHint": False,
            "idempotentHint": False, "openWorldHint": False})
 def cad_rename_layout(params: RenameLayoutInput) -> str:
+    """按明确旧名称重命名纸空间布局，拒绝保护对象或同名冲突；不自动保存。"""
     try:
         return _ok({"ok": True, **_get_backend().rename_layout(params.old_name, params.new_name)})
     except Exception as e:
@@ -3380,10 +3399,10 @@ def cad_rename_layout(params: RenameLayoutInput) -> str:
 
 
 class PageSetupScaleInput(ToolInput):
-    mode: Literal["standard", "custom", "fit"] = "standard"
-    standard_scale: Optional[str] = Field(default="1:1", min_length=1, max_length=80)
-    numerator: Optional[float] = Field(default=None, gt=0, le=1000000)
-    denominator: Optional[float] = Field(default=None, gt=0, le=1000000)
+    mode: Literal["standard", "custom", "fit"] = Field(default="standard", description="目标选择类别：pair 为两个拾取，polyline 为整条多段线")
+    standard_scale: Optional[str] = Field(default="1:1", min_length=1, max_length=80, description="标准打印比例名称，例如 1:1；custom 或 fit 时按接口组合要求填写")
+    numerator: Optional[float] = Field(default=None, gt=0, le=1000000, description="自定义打印比例分子")
+    denominator: Optional[float] = Field(default=None, gt=0, le=1000000, description="自定义打印比例分母")
 
     @model_validator(mode="after")
     def validate_scale(self):
@@ -3393,24 +3412,25 @@ class PageSetupScaleInput(ToolInput):
 
 
 class CreateOrUpdatePageSetupInput(ToolInput):
-    name: str = Field(min_length=1, max_length=255)
-    device: str = Field(min_length=1, max_length=500)
-    media_name: str = Field(min_length=1, max_length=500)
-    rotation: Literal[0, 90, 180, 270] = 0
-    plot_style_sheet: str = Field(min_length=1, max_length=500)
-    plot_type: Literal["display", "extents", "limits", "view", "window", "layout"] = "layout"
-    paper_units: Literal["millimeters", "inches", "pixels"] = "millimeters"
-    plot_scale: PageSetupScaleInput = Field(default_factory=PageSetupScaleInput)
-    center_plot: bool = False
-    plot_with_lineweights: bool = True
-    plot_with_plot_styles: bool = True
-    replace: bool = False
+    name: str = Field(min_length=1, max_length=255, description="待创建或更新的资源名称，须符合后端命名规则")
+    device: str = Field(min_length=1, max_length=500, description="当前 AutoCAD 实际存在的打印设备或 PC3 名称")
+    media_name: str = Field(min_length=1, max_length=500, description="当前设备实际列出的介质名称，不根据纸张尺寸猜名称")
+    rotation: Literal[0, 90, 180, 270] = Field(default=0, description="旋转角度，单位为度；布局打印仅接受其枚举列出的方向")
+    plot_style_sheet: str = Field(min_length=1, max_length=500, description="本机已核实的 CTB/STB 打印样式表名称")
+    plot_type: Literal["display", "extents", "limits", "view", "window", "layout"] = Field(default="layout", description="打印范围类型，按字段枚举选择；布局工作流使用 layout")
+    paper_units: Literal["millimeters", "inches", "pixels"] = Field(default="millimeters", description="打印纸张单位，不改变模型坐标单位")
+    plot_scale: PageSetupScaleInput = Field(default_factory=PageSetupScaleInput, description="打印比例对象；standard、custom、fit 对应不同必填组合")
+    center_plot: bool = Field(default=False, description="是否启用打印居中，布局打印按实际可支持的方式回读")
+    plot_with_lineweights: bool = Field(default=True, description="是否按对象或图层线宽打印")
+    plot_with_plot_styles: bool = Field(default=True, description="是否使用指定打印样式表")
+    replace: bool = Field(default=False, description="是否允许替换同名资源；默认保留已有资源")
 
 
 @_tool(name="cad_create_or_update_page_setup", annotations={"title": "创建或更新命名页面设置",
            "readOnlyHint": False, "destructiveHint": False,
            "idempotentHint": True, "openWorldHint": True})
 def cad_create_or_update_page_setup(params: CreateOrUpdatePageSetupInput) -> str:
+    """在 acad 创建或更新命名页面设置，使用本机真实打印资源并回读验证。"""
     try:
         payload = params.model_dump(mode="python")
         return _ok({"ok": True, **_get_backend().create_or_update_page_setup(**payload)})
@@ -3419,10 +3439,10 @@ def cad_create_or_update_page_setup(params: CreateOrUpdatePageSetupInput) -> str
 
 
 class PreviewDwtProfileInput(ToolInput):
-    profile_path: str = Field(min_length=1, max_length=2000)
-    target_drawing: str = Field(min_length=1, max_length=2000)
-    update_existing: bool = True
-    preserve_unmanaged: bool = True
+    profile_path: str = Field(min_length=1, max_length=2000, description="严格 DraftingProfile 2.0 UTF-8 JSON 的完整路径")
+    target_drawing: str = Field(min_length=1, max_length=2000, description="目标图纸的明确身份路径；须与当前绑定图纸一致，不会据此自动打开图纸")
+    update_existing: bool = Field(default=True, description="是否按配置更新已存在的受管资源")
+    preserve_unmanaged: bool = Field(default=True, description="是否保留配置未声明的对象；不能据此自动删除用户内容")
 
 
 @_tool(name="cad_preview_dwt_profile", annotations={"title": "预览 DWT 配置计划",
@@ -3446,12 +3466,12 @@ def cad_preview_dwt_profile(params: PreviewDwtProfileInput) -> str:
 
 
 class ApplyDwtProfileInput(SemanticToolInput):
-    profile_path: str = Field(min_length=1, max_length=2000)
-    target_drawing: Optional[str] = Field(default=None, min_length=1, max_length=2000)
-    dry_run: bool = True
-    update_existing: bool = True
-    preserve_unmanaged: bool = True
-    confirmation_token: Optional[str] = Field(default=None, min_length=1, max_length=80)
+    profile_path: str = Field(min_length=1, max_length=2000, description="严格 DraftingProfile 2.0 UTF-8 JSON 的完整路径")
+    target_drawing: Optional[str] = Field(default=None, min_length=1, max_length=2000, description="目标图纸的明确身份路径；须与当前绑定图纸一致，不会据此自动打开图纸")
+    dry_run: bool = Field(default=True, description="true 只预检或返回计划，false 才正式执行；预览不保证原生操作或资源必定可用")
+    update_existing: bool = Field(default=True, description="是否按配置更新已存在的受管资源")
+    preserve_unmanaged: bool = Field(default=True, description="是否保留配置未声明的对象；不能据此自动删除用户内容")
+    confirmation_token: Optional[str] = Field(default=None, min_length=1, max_length=80, description="同参数、同目标状态的预览返回的确认令牌；状态改变或过期后重新预览")
 
 
 @_tool(name="cad_apply_dwt_profile", annotations={"title": "预览或应用 DWT 配置",
@@ -3481,14 +3501,15 @@ def cad_apply_dwt_profile(params: ApplyDwtProfileInput) -> str:
 
 
 class ValidateDwtProfileInput(ToolInput):
-    profile_path: str = Field(min_length=1, max_length=2000)
-    preserve_unmanaged: bool = True
+    profile_path: str = Field(min_length=1, max_length=2000, description="严格 DraftingProfile 2.0 UTF-8 JSON 的完整路径")
+    preserve_unmanaged: bool = Field(default=True, description="是否保留配置未声明的对象；不能据此自动删除用户内容")
 
 
 @_tool(name="cad_validate_dwt_profile", annotations={"title": "校验当前图纸的 DWT 配置",
            "readOnlyHint": True, "destructiveHint": False,
            "idempotentHint": True, "openWorldHint": True})
 def cad_validate_dwt_profile(params: ValidateDwtProfileInput) -> str:
+    """按严格 DraftingProfile 2.0 逐项核对当前环境，返回差异和未验证项；只读。"""
     try:
         profile, evidence = _required_v2_profile(params.profile_path)
         result = _get_backend().validate_dwt_profile(
@@ -3505,14 +3526,15 @@ def cad_validate_dwt_profile(params: ValidateDwtProfileInput) -> str:
 
 
 class RenameLayerInput(ToolInput):
-    old_name: str = Field(min_length=1, max_length=255)
-    new_name: str = Field(min_length=1, max_length=255)
+    old_name: str = Field(min_length=1, max_length=255, description="待改名的现有图层或布局名称")
+    new_name: str = Field(min_length=1, max_length=255, description="新名称；已有同名或受保护对象会被拒绝")
 
 
 @_tool(name="cad_rename_layer", annotations={"title": "重命名图层",
            "readOnlyHint": False, "destructiveHint": False,
            "idempotentHint": False, "openWorldHint": False})
 def cad_rename_layer(params: RenameLayerInput) -> str:
+    """重命名已有图层并回读核验，保护图层或重名冲突会被拒绝。"""
     try:
         return _ok({"ok": True, **_get_backend().rename_layer(params.old_name, params.new_name)})
     except Exception as e:
@@ -3520,10 +3542,10 @@ def cad_rename_layer(params: RenameLayerInput) -> str:
 
 
 class DeleteLayerInput(ToolInput):
-    names: List[str] = Field(min_length=1, max_length=100)
-    require_empty: bool = True
-    allow_nonempty: bool = False
-    dry_run: bool = True
+    names: List[str] = Field(min_length=1, max_length=100, description="本次明确选中的图层或布局名称列表")
+    require_empty: bool = Field(default=True, description="是否要求目标为空；默认保护有内容的图层或布局")
+    allow_nonempty: bool = Field(default=False, description="是否明确允许处理非空图层；须同时关闭 require_empty，先检查删除计划")
+    dry_run: bool = Field(default=True, description="true 只预检或返回计划，false 才正式执行；预览不保证原生操作或资源必定可用")
 
     @model_validator(mode="after")
     def validate_guard(self):
@@ -3536,6 +3558,7 @@ class DeleteLayerInput(ToolInput):
            "readOnlyHint": False, "destructiveHint": True,
            "idempotentHint": True, "openWorldHint": False})
 def cad_delete_layer(params: DeleteLayerInput) -> str:
+    """按名称预览或删除图层，默认要求为空；非空处理须显式授权，不自动保存。"""
     try:
         return _ok({"ok": True, **_get_backend().delete_layer(
             params.names,
@@ -3548,15 +3571,16 @@ def cad_delete_layer(params: DeleteLayerInput) -> str:
 
 
 class DeleteLayoutInput(ToolInput):
-    names: List[str] = Field(min_length=1, max_length=100)
-    require_empty: bool = True
-    dry_run: bool = True
+    names: List[str] = Field(min_length=1, max_length=100, description="本次明确选中的图层或布局名称列表")
+    require_empty: bool = Field(default=True, description="是否要求目标为空；默认保护有内容的图层或布局")
+    dry_run: bool = Field(default=True, description="true 只预检或返回计划，false 才正式执行；预览不保证原生操作或资源必定可用")
 
 
 @_tool(name="cad_delete_layout", annotations={"title": "预览或删除布局",
            "readOnlyHint": False, "destructiveHint": True,
            "idempotentHint": True, "openWorldHint": False})
 def cad_delete_layout(params: DeleteLayoutInput) -> str:
+    """按名称预览或删除布局，默认要求为空并保护 Model 和必要布局；不自动保存。"""
     try:
         return _ok({"ok": True, **_get_backend().delete_layout(
             params.names, require_empty=params.require_empty, dry_run=params.dry_run
@@ -3566,33 +3590,34 @@ def cad_delete_layout(params: DeleteLayoutInput) -> str:
 
 
 class AttributeDefinitionInput(ToolInput):
-    tag: str = Field(min_length=1, max_length=255)
-    prompt: str = Field(default="", max_length=255)
-    default_value: str = Field(default="", max_length=256)
-    text_style: Optional[str] = Field(default=None, min_length=1, max_length=255)
-    text_height: float = Field(default=2.5, gt=0, le=1000000)
-    position: List[float] = Field(default_factory=lambda: [0.0, 0.0, 0.0], min_length=2, max_length=3)
-    rotation: float = Field(default=0.0, ge=-360, le=360)
-    constant: bool = False
-    invisible: bool = False
-    verify: bool = False
-    preset: bool = False
+    tag: str = Field(min_length=1, max_length=255, description="ATTDEF 属性标签，须在该块定义内唯一；插入和更新时按真实标签匹配")
+    prompt: str = Field(default="", max_length=255, description="创建属性时显示的提示文字")
+    default_value: str = Field(default="", max_length=256, description="属性的初始字符串值")
+    text_style: Optional[str] = Field(default=None, min_length=1, max_length=255, description="已存在的文字样式名；null 时沿用当前样式")
+    text_height: float = Field(default=2.5, gt=0, le=1000000, description="属性文字高度，使用模型单位")
+    position: List[float] = Field(default_factory=lambda: [0.0, 0.0, 0.0], min_length=2, max_length=3, description="属性插入位置 [x,y] 或 [x,y,z]")
+    rotation: float = Field(default=0.0, ge=-360, le=360, description="旋转角度，单位为度；布局打印仅接受其枚举列出的方向")
+    constant: bool = Field(default=False, description="是否为常量属性")
+    invisible: bool = Field(default=False, description="属性是否隐藏")
+    verify: bool = Field(default=False, description="是否要求属性输入核验")
+    preset: bool = Field(default=False, description="是否使用预置值而不提示")
 
 
 class CreateOrUpdateAttributeBlockInput(ToolInput):
-    block_name: str = Field(min_length=1, max_length=255)
-    base_point: List[float] = Field(default_factory=lambda: [0.0, 0.0, 0.0], min_length=2, max_length=3)
-    entity_handles: List[str] = Field(default_factory=list, max_length=10000)
-    attribute_definitions: List[AttributeDefinitionInput] = Field(default_factory=list, max_length=500)
-    replace: bool = False
-    dry_run: bool = True
-    annotative: bool = False
+    block_name: str = Field(min_length=1, max_length=255, description="块定义名称；坐标/标高标注使用该名称创建或引用相应定义")
+    base_point: List[float] = Field(default_factory=lambda: [0.0, 0.0, 0.0], min_length=2, max_length=3, description="块定义基点 [x,y] 或 [x,y,z]，使用原图坐标")
+    entity_handles: List[str] = Field(default_factory=list, max_length=10000, description="纳入块定义的当前图纸实体十进制句柄列表")
+    attribute_definitions: List[AttributeDefinitionInput] = Field(default_factory=list, max_length=500, description="ATTDEF 属性定义列表，包含标签、位置、字高及显示开关")
+    replace: bool = Field(default=False, description="是否允许替换同名资源；默认保留已有资源")
+    dry_run: bool = Field(default=True, description="true 只预检或返回计划，false 才正式执行；预览不保证原生操作或资源必定可用")
+    annotative: bool = Field(default=False, description="是否创建原生注释性块；true 仅 acad 支持")
 
 
 @_tool(name="cad_create_or_update_attribute_block", annotations={"title": "创建带属性定义的块",
            "readOnlyHint": False, "destructiveHint": True,
            "idempotentHint": True, "openWorldHint": False})
 def cad_create_or_update_attribute_block(params: CreateOrUpdateAttributeBlockInput) -> str:
+    """预览或创建含 ATTDEF 的块定义；原生注释性仅 acad，严格模式须提供语义归属。"""
     try:
         backend = _get_backend()
         if params.annotative and _backend_mode(backend) != "acad":
@@ -3619,14 +3644,15 @@ def cad_create_or_update_attribute_block(params: CreateOrUpdateAttributeBlockInp
 
 
 class SetBlockAttributesInput(ToolInput):
-    block_handle: str = Field(min_length=1, max_length=40)
-    values: Dict[str, str] = Field(max_length=256)
+    block_handle: str = Field(min_length=1, max_length=40, description="待修改的块引用十进制句柄，不是块定义名")
+    values: Dict[str, str] = Field(max_length=256, description="字段名或属性标签到待填写值的映射；按当前模板或块的真实标签填写")
 
 
 @_tool(name="cad_set_block_attributes", annotations={"title": "填写块属性",
            "readOnlyHint": False, "destructiveHint": False,
            "idempotentHint": True, "openWorldHint": False})
 def cad_set_block_attributes(params: SetBlockAttributesInput) -> str:
+    """按当前块引用的真实属性标签更新字符串值，返回已更新、未变和缺失标签。"""
     try:
         return _ok({"ok": True, **_get_backend().set_block_attributes(
             params.block_handle, params.values
@@ -3636,22 +3662,23 @@ def cad_set_block_attributes(params: SetBlockAttributesInput) -> str:
 
 
 class BindBlockAttributeFieldInput(ToolInput):
-    block_handle: str = Field(min_length=1, max_length=40)
-    attribute_tag: str = Field(min_length=1, max_length=255)
-    source_type: Literal["object"] = "object"
-    source_handle: str = Field(min_length=1, max_length=40)
-    source_property: str = Field(min_length=1, max_length=80)
-    linear_scale_factor: float = Field(default=1.0, gt=0, le=1000000)
-    precision: int = Field(default=3, ge=0, le=8)
-    prefix: str = Field(default="", max_length=80)
-    suffix: str = Field(default="", max_length=80)
-    update_on_regen: bool = True
+    block_handle: str = Field(min_length=1, max_length=40, description="待修改的块引用十进制句柄，不是块定义名")
+    attribute_tag: str = Field(min_length=1, max_length=255, description="块中真实存在的属性标签")
+    source_type: Literal["object"] = Field(default="object", description="字段来源类别，按枚举选择对象属性、坐标或标高")
+    source_handle: str = Field(min_length=1, max_length=40, description="关联来源实体的十进制句柄，须在当前图纸中存在")
+    source_property: str = Field(min_length=1, max_length=80, description="来源对象的可关联属性名称，须能由 AutoCAD 字段读取")
+    linear_scale_factor: float = Field(default=1.0, gt=0, le=1000000, description="字段显示值的长度换算因子；只改显示，不缩放几何")
+    precision: int = Field(default=3, ge=0, le=8, description="显示小数位数，不代表工程计算精度")
+    prefix: str = Field(default="", max_length=80, description="显示数值前的文字")
+    suffix: str = Field(default="", max_length=80, description="显示数值后的文字")
+    update_on_regen: bool = Field(default=True, description="是否要求字段在 AutoCAD REGEN 后更新，必须回读验证关联")
 
 
 @_tool(name="cad_bind_block_attribute_field", annotations={"title": "绑定块属性到 AutoCAD 字段",
            "readOnlyHint": False, "destructiveHint": False,
            "idempotentHint": True, "openWorldHint": False})
 def cad_bind_block_attribute_field(params: BindBlockAttributeFieldInput) -> str:
+    """在 acad 为块属性建立原生对象字段并验证关联，不用静态文字冒充成功。"""
     try:
         return _ok({"ok": True, **_get_backend().bind_block_attribute_field(
             **params.model_dump(mode="python", exclude={"semantic"})
@@ -3661,19 +3688,20 @@ def cad_bind_block_attribute_field(params: BindBlockAttributeFieldInput) -> str:
 
 
 class ImportBlockDefinitionsInput(ToolInput):
-    source_path: str = Field(min_length=1, max_length=2000)
-    block_names: List[str] = Field(min_length=1, max_length=500)
+    source_path: str = Field(min_length=1, max_length=2000, description="现有源 DWG 的完整路径；以只读方式检查或导入，不保存源文件")
+    block_names: List[str] = Field(min_length=1, max_length=500, description="明确选择的块定义名称列表，不自动推断目标块")
     expected_sha256: Optional[str] = Field(
         default=None, pattern=r"^[0-9a-fA-F]{64}$",
         description="正式导入时必填；通常使用 dry_run 返回的 source_hash")
-    replace_existing: bool = False
-    dry_run: bool = True
+    replace_existing: bool = Field(default=False, description="是否允许替换当前图纸已有同名块定义，默认禁止")
+    dry_run: bool = Field(default=True, description="true 只预检或返回计划，false 才正式执行；预览不保证原生操作或资源必定可用")
 
 
 @_tool(name="cad_import_block_definitions", annotations={"title": "从外部 DWG 导入块定义",
            "readOnlyHint": False, "destructiveHint": True,
            "idempotentHint": True, "openWorldHint": True})
 def cad_import_block_definitions(params: ImportBlockDefinitionsInput) -> str:
+    """预检或从已核验的 DWG 块库导入指定定义，仅 acad，默认不替换同名块。"""
     try:
         backend = _get_backend()
         if params.dry_run:
@@ -3709,16 +3737,17 @@ def cad_import_block_definitions(params: ImportBlockDefinitionsInput) -> str:
 
 
 class ExportBlockLibraryInput(ToolInput):
-    target_path: str = Field(min_length=1, max_length=2000)
-    block_names: List[str] = Field(min_length=1, max_length=500)
-    replace: bool = False
-    dry_run: bool = True
+    target_path: str = Field(min_length=1, max_length=2000, description="块库目标 DWG 的完整路径；覆盖受 replace 控制")
+    block_names: List[str] = Field(min_length=1, max_length=500, description="明确选择的块定义名称列表，不自动推断目标块")
+    replace: bool = Field(default=False, description="是否允许替换同名资源；默认保留已有资源")
+    dry_run: bool = Field(default=True, description="true 只预检或返回计划，false 才正式执行；预览不保证原生操作或资源必定可用")
 
 
 @_tool(name="cad_export_block_library", annotations={"title": "预览或导出 DWG 块库",
            "readOnlyHint": False, "destructiveHint": True,
            "idempotentHint": False, "openWorldHint": True})
 def cad_export_block_library(params: ExportBlockLibraryInput) -> str:
+    """预检或导出明确指定的块定义到 DWG 块库，仅 acad，默认不覆盖已有文件。"""
     try:
         return _ok({"ok": True, **_get_backend().export_block_library(
             target_path=params.target_path,
@@ -3731,13 +3760,14 @@ def cad_export_block_library(params: ExportBlockLibraryInput) -> str:
 
 
 class InspectBlockLibraryInput(ToolInput):
-    source_path: str = Field(min_length=1, max_length=2000)
+    source_path: str = Field(min_length=1, max_length=2000, description="现有源 DWG 的完整路径；以只读方式检查或导入，不保存源文件")
 
 
 @_tool(name="cad_inspect_block_library", annotations={"title": "检查外部 DWG 块库",
            "readOnlyHint": True, "destructiveHint": False,
            "idempotentHint": True, "openWorldHint": True})
 def cad_inspect_block_library(params: InspectBlockLibraryInput) -> str:
+    """只读检查 DWG 块库文件哈希、单位和定义清单；仅 acad，不保存源文件。"""
     try:
         return _ok({"ok": True, **_get_backend().inspect_block_library(
             source_path=params.source_path
@@ -3780,22 +3810,23 @@ def cad_audit_block_definition(params: AuditBlockDefinitionInput) -> str:
 
 
 class InsertCoordinateLabelInput(SemanticToolInput):
-    target_x: float
-    target_y: float
-    target_handle: Optional[str] = Field(default=None, min_length=1, max_length=40)
-    display_unit: Literal["m", "mm"] = "m"
-    precision: int = Field(default=3, ge=0, le=8)
-    suppress_trailing_zeros: bool = False
-    associative: bool = True
-    block_name: str = Field(default="CAD_MCP_COORD_LABEL", min_length=1, max_length=255)
-    layer: str = Field(default="ANNO-COORD", min_length=1, max_length=255)
-    text_style: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    target_x: float = Field(description="被标注位置的 WCS X 坐标")
+    target_y: float = Field(description="被标注位置的 WCS Y 坐标")
+    target_handle: Optional[str] = Field(default=None, min_length=1, max_length=40, description="关联标注的目标实体十进制句柄；静态标注可为 null")
+    display_unit: Literal["m", "mm"] = Field(default="m", description="标注显示单位；m 以毫米值乘 0.001，mm 保持原数值")
+    precision: int = Field(default=3, ge=0, le=8, description="显示小数位数，不代表工程计算精度")
+    suppress_trailing_zeros: bool = Field(default=False, description="是否省略数值末尾无意义的零")
+    associative: bool = Field(default=True, description="是否建立原生关联；关联字段仅 acad 支持，DXF 只支持显式静态方式")
+    block_name: str = Field(default="CAD_MCP_COORD_LABEL", min_length=1, max_length=255, description="块定义名称；坐标/标高标注使用该名称创建或引用相应定义")
+    layer: str = Field(default="ANNO-COORD", min_length=1, max_length=255, description="目标图层名称；允许 null 时沿用当前图层或工具规定的默认图层")
+    text_style: Optional[str] = Field(default=None, min_length=1, max_length=255, description="已存在的文字样式名；null 时沿用当前样式")
 
 
 @_tool(name="cad_insert_coordinate_label", annotations={"title": "插入坐标属性块标注",
            "readOnlyHint": False, "destructiveHint": False,
            "idempotentHint": False, "openWorldHint": False})
 def cad_insert_coordinate_label(params: InsertCoordinateLabelInput) -> str:
+    """创建坐标标注；acad 可验证原生关联，DXF 只接受显式非关联静态标注。"""
     try:
         return _ok({"ok": True, **_get_backend().insert_coordinate_label(
             **params.model_dump(mode="python", exclude={"semantic"})
@@ -3805,24 +3836,25 @@ def cad_insert_coordinate_label(params: InsertCoordinateLabelInput) -> str:
 
 
 class InsertElevationLabelInput(SemanticToolInput):
-    target_point: List[float] = Field(min_length=2, max_length=3)
-    target_handle: Optional[str] = Field(default=None, min_length=1, max_length=40)
-    elevation_source: str = Field(default="auto", min_length=1, max_length=80)
-    display_unit: Literal["m", "mm"] = "m"
-    precision: int = Field(default=3, ge=0, le=8)
-    suppress_trailing_zeros: bool = False
-    associative: bool = True
-    block_name: str = Field(default="CAD_MCP_ELEV_LABEL", min_length=1, max_length=255)
-    layer: str = Field(default="ANNO-ELEV", min_length=1, max_length=255)
-    text_style: Optional[str] = Field(default=None, min_length=1, max_length=255)
-    positive_sign: bool = False
-    zero_format: str = Field(default="0.000", min_length=1, max_length=40)
+    target_point: List[float] = Field(min_length=2, max_length=3, description="被标注点的 WCS [x,y] 或 [x,y,z]；二维输入补 Z=0")
+    target_handle: Optional[str] = Field(default=None, min_length=1, max_length=40, description="关联标注的目标实体十进制句柄；静态标注可为 null")
+    elevation_source: str = Field(default="auto", min_length=1, max_length=80, description="标高来源属性选择；auto 由支持的目标类型确定，不能臆造来源")
+    display_unit: Literal["m", "mm"] = Field(default="m", description="标注显示单位；m 以毫米值乘 0.001，mm 保持原数值")
+    precision: int = Field(default=3, ge=0, le=8, description="显示小数位数，不代表工程计算精度")
+    suppress_trailing_zeros: bool = Field(default=False, description="是否省略数值末尾无意义的零")
+    associative: bool = Field(default=True, description="是否建立原生关联；关联字段仅 acad 支持，DXF 只支持显式静态方式")
+    block_name: str = Field(default="CAD_MCP_ELEV_LABEL", min_length=1, max_length=255, description="块定义名称；坐标/标高标注使用该名称创建或引用相应定义")
+    layer: str = Field(default="ANNO-ELEV", min_length=1, max_length=255, description="目标图层名称；允许 null 时沿用当前图层或工具规定的默认图层")
+    text_style: Optional[str] = Field(default=None, min_length=1, max_length=255, description="已存在的文字样式名；null 时沿用当前样式")
+    positive_sign: bool = Field(default=False, description="正标高是否显示加号；原生字段无法验证时拒绝关联写入")
+    zero_format: str = Field(default="0.000", min_length=1, max_length=40, description="零标高的显示字符串；关联字段无法验证条件格式时拒绝写入")
 
 
 @_tool(name="cad_insert_elevation_label", annotations={"title": "插入标高属性块标注",
            "readOnlyHint": False, "destructiveHint": False,
            "idempotentHint": False, "openWorldHint": False})
 def cad_insert_elevation_label(params: InsertElevationLabelInput) -> str:
+    """创建标高标注；保留显示格式，无法验证关联字段时停止，DXF 仅支持静态方式。"""
     try:
         return _ok({"ok": True, **_get_backend().insert_elevation_label(
             **params.model_dump(mode="python", exclude={"semantic"})
@@ -3832,19 +3864,20 @@ def cad_insert_elevation_label(params: InsertElevationLabelInput) -> str:
 
 
 class CreateOrUpdateCtbInput(ToolInput):
-    name: str = Field(min_length=5, max_length=255)
-    target_directory: str = Field(min_length=1, max_length=2000)
-    color_policy: Literal["all_black"] = "all_black"
-    use_object_lineweight: bool = True
-    grayscale: bool = False
-    replace: bool = False
-    dry_run: bool = True
+    name: str = Field(min_length=5, max_length=255, description="待创建或更新的资源名称，须符合后端命名规则")
+    target_directory: str = Field(min_length=1, max_length=2000, description="CTB 输出目录完整路径；该能力当前可能返回 UNSUPPORTED_OPERATION")
+    color_policy: Literal["all_black"] = Field(default="all_black", description="打印颜色策略，使用枚举允许的原色或黑色方式")
+    use_object_lineweight: bool = Field(default=True, description="是否沿用对象线宽")
+    grayscale: bool = Field(default=False, description="是否灰度打印")
+    replace: bool = Field(default=False, description="是否允许替换同名资源；默认保留已有资源")
+    dry_run: bool = Field(default=True, description="true 只预检或返回计划，false 才正式执行；预览不保证原生操作或资源必定可用")
 
 
 @_tool(name="cad_create_or_update_ctb", annotations={"title": "检查 CTB 创建请求",
            "readOnlyHint": False, "destructiveHint": True,
            "idempotentHint": True, "openWorldHint": True})
 def cad_create_or_update_ctb(params: CreateOrUpdateCtbInput) -> str:
+    """预检 CTB 输出计划；当前无法可靠自动生成时返回 UNSUPPORTED_OPERATION，不创建伪文件。"""
     try:
         return _ok({"ok": True, **_get_backend().create_or_update_ctb(
             **params.model_dump(mode="python", exclude={"semantic"})
@@ -4020,12 +4053,12 @@ class GatewayListParams(ToolInput):
 
 
 class GatewayDescribeParams(ToolInput):
-    tool_name: str = Field(min_length=1, max_length=128)
+    tool_name: str = Field(min_length=1, max_length=128, description="原始 CAD 工具的精确名称，不接受网关入口嵌套调用")
 
 
 class GatewayCallParams(ToolInput):
-    tool_name: str = Field(min_length=1, max_length=128)
-    arguments: Dict[str, Any] = Field(default_factory=dict)
+    tool_name: str = Field(min_length=1, max_length=128, description="原始 CAD 工具的精确名称，不接受网关入口嵌套调用")
+    arguments: Dict[str, Any] = Field(default_factory=dict, description="原始工具的完整参数对象，通常为 {params:{...}}；以 describe 返回的 inputSchema 为准")
 
 
 _TOOLSET_ENV = "CAD_MCP_TOOLSET"

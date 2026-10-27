@@ -11,11 +11,13 @@ pwsh -File .\scripts\verify.ps1
 只运行测试：
 
 ```powershell
-uv run pytest
+uv run pytest -m 'not acad'
 ```
 
-测试默认使用仓库内 `.cache/pytest/` 下的临时图纸和日志目录，不读取用户的 CAD 配置。带 `acad` 标记的测试
-可能连接本机 AutoCAD，应单独运行并确认当前图纸状态。
+测试的 `tests/conftest.py` 只在环境变量未设置时补入 DXF、legacy 策略及仓库内
+`.cache/pytest/` 图纸、日志目录，仍会读取用户配置文件。已有环境变量和无效的个人配置
+可能影响测试，因此不能把普通测试命令视为完全隔离。带 `acad` 标记的测试须显式授权；
+常规回归使用 `uv run pytest -m 'not acad'`，不要在不知当前开关状态时直接运行全部测试。
 
 验证脚本始终排除 `acad` 实机测试，并把 Python wheel 构建到系统临时目录；构建检查完成后
 清理 wheel 以及本次生成的 `build/` 和包元数据。它不会生成发布 ZIP，也不会把构建产物加入 Git。
@@ -203,3 +205,42 @@ uv run pytest tests/unit/test_acad_original_documents.py
 
 该回归检查空白页例外、原图保护、布局内容和活动图纸恢复规则，不证明真实 AutoCAD
 中的写入、保存、重开或撤销已经验证通过。
+
+## 显式隔离配置的离线回归
+
+在新的 PowerShell 7 会话中执行，结束后关闭该会话，避免环境变量留给后续 CAD 工作：
+
+```powershell
+$taskDir = Join-Path ([IO.Path]::GetTempPath()) ("cad-mcp-check-" + [Guid]::NewGuid().ToString('N'))
+$env:CAD_CONFIG_FILE = Join-Path $taskDir 'absent-config.json'
+$env:CAD_MODE = 'dxf'
+$env:CAD_SEMANTIC_POLICY = 'legacy'
+$env:CAD_MCP_RUN_ACAD_INTEGRATION = '0'
+$env:CAD_DRAWINGS_DIR = Join-Path $taskDir 'drawings'
+$env:CAD_LOG_DIR = Join-Path $taskDir 'logs'
+$env:PYTHONDONTWRITEBYTECODE = '1'
+uv run --locked pytest -m 'not acad' --basetemp="$taskDir/tmp" -o "cache_dir=$taskDir/cache"
+```
+
+配置文件路径故意指向新目录中的不存在文件，不修改个人配置；legacy 仅用于现有兼容性
+回归夹具，严格模式专用测试会自行覆盖策略，不能据此关闭生产严格策略。`--locked`
+要求锁文件可用且可能同步开发依赖；只用现有环境时改用 `.venv/Scripts/python.exe -m pytest`
+并原样保留后面的参数，结果只证明该现有环境，不能称为锁定环境验收。
+
+## 文档同步校验
+
+```powershell
+uv run python tools/generate_tool_reference.py
+uv run python tools/generate_tool_reference.py --check
+uv run pytest tests/unit/test_documentation.py -m 'not acad'
+```
+
+生成器只导入工具注册与参数模型，不调用 CAD；使用独立临时配置，并在 Windows 清理
+临时目录前关闭自有日志。完整工具索引与参数结构由运行时定义生成，禁止手改生成文件。
+改动工具的用途说明或字段描述后须重新生成，再核对模式限制和非统一返回格式。
+
+本次额外圆角实机回归为 `tests/integration/test_fillet_view_acad.py`：先手动打开 CAD，
+明确授权后在单独进程设置 `CAD_MCP_RUN_ACAD_INTEGRATION=1` 及
+`CAD_SEMANTIC_POLICY=strict`，只运行该文件。用例使用自建未保存图纸，检查极端缩放下
+预览零写入、圆角半径、独立身份和原视图恢复；成功后不保存关闭，异常时保留现场。
+本轮验证记录见[2026-10-27 审计修复与验证](validation/audit-fixes-2026-10-27.md)。

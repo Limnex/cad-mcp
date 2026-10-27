@@ -1,6 +1,8 @@
-# Contributing
+# 贡献指南
 
-1. Install Python 3.11-3.14 and `uv`.
-2. Run `pwsh -File .\scripts\verify.ps1` before submitting a change.
-3. Keep machine-specific paths and generated drawings out of the repository.
-4. Preserve the DXF/AutoCAD capability boundary and safety confirmation behavior.
+1. 安装 Python 3.11–3.14 和 uv；从仓库根目录执行 `pwsh -File ./scripts/verify.ps1` 验证锁定依赖、离线测试和临时wheel构建。
+2. 测试环境不会无条件忽略个人配置。按[开发与验证](docs/development.md#显式隔离配置的离线回归)设置独立配置、目录和模式；实机用例另行授权，只操作自建测试图纸。
+3. 修改工具或参数说明后，执行 `uv run python tools/generate_tool_reference.py` 和 `--check`，同步[完整参考](docs/api-reference.md)与参数结构。不能改变字段必填性来迁就错误示例。
+4. 保持 DXF/AutoCAD 能力边界、预览和确认流程、统一未知写入保护；不得为通过测试绕过身份或回滚核验。
+5. 不提交个人配置、真实图纸、敏感路径、日志或缓存。记录测试源码、环境及未验证项，不能把模拟成功当作实机或已安装服务验收。
+6. 提交说明写清问题、最终行为、验证结果和限制。历史验证记录保留日期，新增证据另附记录。

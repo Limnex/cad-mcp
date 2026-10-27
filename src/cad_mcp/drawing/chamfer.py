@@ -28,13 +28,13 @@ class ChamferPick(ChamferModel):
 
 
 class ChamferPair(ChamferModel):
-    mode: Literal["pair"] = "pair"
-    first: ChamferPick
-    second: ChamferPick
+    mode: Literal["pair"] = Field(default="pair", description="目标选择类别：pair 为两个拾取，polyline 为整条多段线")
+    first: ChamferPick = Field(description="第一侧实体句柄及 WCS 拾取点，决定第一侧距离的含义")
+    second: ChamferPick = Field(description="第二侧实体句柄及 WCS 拾取点，决定第二侧距离的含义")
 
 
 class ChamferPolyline(ChamferModel):
-    mode: Literal["polyline"] = "polyline"
+    mode: Literal["polyline"] = Field(default="polyline", description="目标选择类别：pair 为两个拾取，polyline 为整条多段线")
     handle: Handle = Field(description="整体倒角的二维多段线十进制句柄")
 
 
@@ -43,7 +43,7 @@ Target = Annotated[ChamferPair | ChamferPolyline, Field(discriminator="mode")]
 
 class ChamferRequest(ChamferModel):
     targets: list[Target] = Field(min_length=1, max_length=20, description="依次处理的对象组；整体倒角或两对象/同一多段线相邻直线段")
-    method: Literal["distance", "angle"] = "distance"
+    method: Literal["distance", "angle"] = Field(default="distance", description="倒角尺寸方式：distance 为两侧距离，angle 为第一侧距离加角度")
     distance1: Number = Field(ge=0, description="第一侧倒角距离或角度方式的长度，毫米；距离方式双零表示尖角")
     distance2: Number | None = Field(default=None, ge=0, description="距离方式的第二侧距离；省略等于 distance1")
     angle: Number | None = Field(default=None, ge=0, lt=180, description="角度方式：相对第一侧的倒角角度，度；须小于所选夹角的补角")

@@ -132,3 +132,32 @@
 审查结果的主要可比较路径包括 `/block`、`/entity_tree`、`/geometry/bounding_box`、`/geometry/center`、`/geometry/symmetry`、`/geometry/connection_points`、`/properties/texts`、`/properties/attdefs`、`/properties/layers`、`/properties/linetypes`、`/properties/lineweights`、`/properties/nested_references` 和 `/fingerprint`。规格卡未声明的期望值不自动生成；预期指纹为 `null` 时仍返回实际指纹，但该比较项为“无法验证”。
 
 结构示例见 [block-library_manifest.json](../examples/block-library_manifest.json)。示例中的路径、哈希和期望指纹均需用真实核验结果替换。
+
+## 环境工程模型的字段与引用
+
+| 层级 | 字段与关系 |
+|---|---|
+| 项目 | 必填 project_id、project_name；schema_version=1.0、units=mm，revision 为稳定修订字符串 |
+| facilities | 每项用稳定 id，声明 facility_type、origin、outline；components 表示同一设施的部件 |
+| network_systems | 每项 id/name/medium，内部 nodes 和 segments；不能把旧 nodes/pipes 放在顶层 |
+| nodes | id、point；可声明 node_type、elevation、equipment_id、port_id，绑定必须指向真实对象 |
+| segments | id、start_node、end_node、path、section；两端节点必须在所属网络内存在，路径端点与节点位置一致 |
+| views | id/view_type/scale_denominator；facility_ids、network_system_ids、profile_ids、annotation_ids 引用已声明对象 |
+| profiles | 纵断面系列及水平/竖向比例；可按 network_system_id、segment_ids 引用网络和管段 |
+| annotations | annotation_type、view_id、anchor，以及按类型要求的文字、值或 target_id |
+| schedules | 表格类型、source_type、columns、view_id 等；使用 schedules 而非旧 tables |
+| sheets | 纸张、布局和 template_id、view_ids 组合，不能把结构校验当作原生布局已建立 |
+| metadata | 说明信息；不参与工程设计判断 |
+
+项目内语义ID须遵守模型校验要求，不靠重复名称连接。字段的可省略性、默认值、长度范围
+与联合类型以[完整参数结构](../../../docs/tool-schemas.json)中的 EnvironmentModel 及其
+引用定义为准。最小示例已按当前模型改写，并通过公共校验和预览接口回归；只作结构与
+编译演示，不证明尺寸合理、资源存在或规范符合。制图配置、模板清单和块规格卡的占位
+路径/哈希都须在正式应用前替换，不能为了通过校验编造资源。
+
+## 输入键、空值与成功证据
+
+必填且允许 null 的键仍需出现，例如实心填充的 boundary_handle/points；省略其中一个
+不是合法的二选一。多数工具返回 JSON，三个历史查询例外和MCP图片返回见[工具参考](../../../docs/api-reference.md)。
+缓存健康结果可能省略 semantic_policy；缺失字段保持未知。DXF首次新建会保存空白文件，
+acad新建返回预定路径但文档尚未保存，必须显式检查文件和实际保存状态。

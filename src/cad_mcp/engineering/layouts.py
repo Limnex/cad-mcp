@@ -24,22 +24,22 @@ VIEWPORT_LAYER = "CAD-MCP-VPORT"
 
 
 class LayoutRequest(TemplateModel):
-    manifest_path: str = Field(min_length=1, max_length=1000)
-    sheet_id: str = Field(min_length=1, max_length=120)
-    layout_name: str = Field(min_length=1, max_length=120)
+    manifest_path: str = Field(min_length=1, max_length=1000, description="图框模板清单 JSON 文件路径；相对源文件路径按清单目录解析")
+    sheet_id: str = Field(min_length=1, max_length=120, description="模板清单中已声明的图幅 ID")
+    layout_name: str = Field(min_length=1, max_length=120, description="目标纸空间布局名称；不能将 Model 当作纸空间布局")
     layout_id: str = Field(min_length=1, max_length=120,
         description="稳定的布局归属 ID；重复执行必须沿用")
-    region_id: str = Field(min_length=1, max_length=120)
+    region_id: str = Field(min_length=1, max_length=120, description="模板清单 usable_regions 中的有效绘图区 ID")
     page_setup_name: str = Field(min_length=1, max_length=255,
         description="已有命名页面设置；预览只读查询该设置，不修改当前布局")
-    rotation: Literal[0, 90, 180, 270] | None = None
-    content_bounds: Bounds | None = None
-    content_handles: list[str] | None = Field(default=None, min_length=1, max_length=10000)
+    rotation: Literal[0, 90, 180, 270] | None = Field(default=None, description="旋转角度，单位为度；布局打印仅接受其枚举列出的方向")
+    content_bounds: Bounds | None = Field(default=None, description="模型内容范围 [xmin,ymin,xmax,ymax]；使用模型坐标，不是纸面毫米")
+    content_handles: list[str] | None = Field(default=None, min_length=1, max_length=10000, description="限定展示范围的模型空间十进制句柄列表；与 content_bounds 互斥")
     model_mm_per_unit: float = Field(gt=0, le=1e9,
         description="一个模型坐标单位对应多少毫米；毫米为1，米为1000")
-    model_elevation: float = 0.0
-    scale_denominator: float = Field(gt=0, le=1e9)
-    padding_mm: float = Field(default=2.0, ge=0, le=1000)
+    model_elevation: float = Field(default=0.0, description="目标模型平面的 WCS Z 标高；不将倾斜对象投影到平面")
+    scale_denominator: float = Field(gt=0, le=1e9, description="比例分母；视口 100 表示 1:100，自定义打印比例须结合分子")
+    padding_mm: float = Field(default=2.0, ge=0, le=1000, description="视口相对有效绘图区四边的纸面留白，毫米")
     existing_viewport_handle: str | None = Field(default=None,
         description="显式复用目标布局的浮动视口，正整数十进制句柄；保留原实体")
 

@@ -48,7 +48,7 @@ CAD MCP 负责把已确定的工程数据转成 CAD 实体，并负责检查、�
 
 ### 绘制第一笔之前的语义登记
 
-运行时默认 `semantic_policy=strict`，以 `cad_health` 回读为准。Agent 不得要求关闭
+运行时默认 `semantic_policy=strict`；以实际工作进程健康结果核对，主进程缓存诊断可能缺少该字段，不自行补值。Agent 不得要求关闭
 严格模式来绕过缺失信息。先通过 `cad_register_semantic_object` 登记工程对象的
 项目编号、对象编号、名称、类型和来源，再为每次直接绘图提供 `semantic` 中的
 `project_id`、`object_id`、`role` 和可选 `view_id`。辅助线也须有真实归属或辅助用途。
@@ -153,3 +153,24 @@ AutoCAD 圆角使用 `cad_fillet`：先查十进制句柄，指定半径、拾�
 - [模板清单示例](examples/template-manifest.json)
 - [块规格卡示例](examples/block-library_manifest.json)
 - [DWT Profile 2.0 结构示例](examples/dwt-profile-v2.schema-example.json)
+
+## 会话、返回格式与完整索引
+
+DXF 用 `cad_list_drawings` / `cad_activate_drawing` 按 ID 切换，每张图独立保留未保存
+内容和活动样式；同一路径复用已有内存会话。关闭只针对活动图，须明确保存或放弃。
+会话内存不能防止进程退出后丢失。AutoCAD 按完整路径复用/绑定图纸，点击标签不改变
+MCP 绑定。新建 DWG 尚未保存，返回 path 不能作为文件已经落盘的证据。
+
+受支持的 COM 写入超时先回读确认，成功正常返回且不重放；未知写入或未核实回滚统一
+保护所有变更入口。重连、绑定、普通预览不解除保护。圆角/倒角在严格模式统一核验归属，
+新实体独立 UID，身份写入失败也须回滚；pair 圆角临时放大后恢复实际视图。
+
+不要假定每次成功都返回 JSON：`cad_get_drawing_info`、`cad_list_entities`、
+`cad_check_drawing` 成功为纯文本，图像预览为 MCP 内容块。健康检查的 worker 缓存和
+last_known 字段不是最新 CAD 活性证明，semantic_policy 缺失时不得猜测。
+
+116个工具的用途、模式限制、参数及返回类别见[完整工具参考](../../docs/api-reference.md)，
+嵌套结构见[参数结构](../../docs/tool-schemas.json)。实心填充的两种边界键都必填，未选键
+传 null；两项模板文件核验/比例计算不依赖 CAD，详见[工具契约](references/tool-contracts.md)。
+旧同版本服务或缓存可能仍只有101个工具；先核对实际集合，再按[安装说明](../../docs/installation.md#源码与已安装服务一致性)
+处理。源代码测试通过不代表当前已安装服务同步。
