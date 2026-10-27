@@ -201,8 +201,10 @@ def fillet_acad(backend, **arguments):
     # Read every setting before writes. Restore them even after native errors.
     settings = {name: backend.doc.GetVariable(name)
                 for name in ("FILLETRAD", "TRIMMODE", "OSMODE", "CMDECHO", "USERS5")}
-    point_selection = params.mode == "pair" and any(s["type"] != "LINE" for s in before.values())
-    saved_view = _view_state(backend) if point_selection else None
+    pair_mode = params.mode == "pair"
+    point_selection = pair_mode and any(s["type"] != "LINE" for s in before.values())
+    # Native FILLET also needs a usable view for ename/pick pairs of lines.
+    saved_view = _view_state(backend) if pair_mode else None
     if outer_transaction:
         backend._native_rollback_probe = lambda: (
             all(backend.doc.GetVariable(name) == value for name, value in settings.items())
@@ -276,7 +278,7 @@ def fillet_acad(backend, **arguments):
         for name, value in {"FILLETRAD": params.radius, "TRIMMODE": int(params.trim),
                             "OSMODE": 0, "CMDECHO": 0, "USERS5": marker + ":pending"}.items():
             backend.doc.SetVariable(name, value)
-        if point_selection:
+        if pair_mode:
             points = params.pick_points
             span = max(1.0, *(abs(points[0][axis] - points[1][axis]) for axis in (0, 1)))
             low = [min(p[axis] for p in points) - span * 0.25 for axis in (0, 1)] + [z]

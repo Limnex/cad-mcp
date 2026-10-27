@@ -190,6 +190,32 @@ def test_native_fillet_joins_outer_transaction_without_nested_undo(tmp_path):
         TRANSACTION_BACKEND.reset(token)
 
 
+@pytest.mark.parametrize("failure", [False, True])
+def test_line_pair_extreme_view_is_usable_and_restored(tmp_path, failure):
+    def operation(items):
+        # Check the native operation runs with a usable view, even on rejection.
+        assert variables["VIEWSIZE"] == 20.0
+        assert variables["VIEWCTR"] == (20, 30, 0)
+        if not failure:
+            round_lines(items)
+
+    backend, items, calls, variables, initial = backend_fixture(tmp_path, operation)
+    variables.update(VIEWCTR=(1.4e8, 3e7, 0), VIEWSIZE=1.3e8)
+    initial.update(variables)
+    original = copy.deepcopy(items)
+    preview = backend.fillet(**PAIR)
+    assert preview["dry_run"] and items == original and calls == []
+    assert variables == initial
+    if failure:
+        with pytest.raises(RuntimeError, match="FILLET 未改变图形"):
+            backend.fillet(**PAIR, dry_run=False)
+        assert items == original
+    else:
+        assert backend.fillet(**PAIR, dry_run=False)["verified"]
+    assert variables == initial
+    assert [c[0] for c in calls if c[0].startswith("zoom")] == ["zoom", "zoom_previous"]
+
+
 def test_no_trim_retains_sources(tmp_path):
     backend, _, _, variables, initial = backend_fixture(tmp_path, lambda items: items.append(arc()))
     result = backend.fillet(**PAIR, trim=False, dry_run=False)

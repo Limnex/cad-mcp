@@ -70,7 +70,7 @@ DXF 可读写图纸设置、图层、尺寸样式和基础属性块，但不提�
 
 预检返回 `before`、`applied=false`、`verified=false`，不承诺半径可行或预测切点。正式执行回读实际变化、标高及圆角半径，返回 `after`、`created`、`modified_handles`、`removed_handles`、`rounded_arc_count`、`applied=true` 和 `verified=true`。零半径操作的圆弧计数为 0。整体多段线遇到短边可能只完成部分拐角，返回值不代表全部角均已圆角。
 
-操作持有现有 AutoCAD 操作锁，预检后建立独立撤销组，恢复并回读 FILLETRAD、TRIMMODE、OSMODE、CMDECHO 和临时完成标记 USERS5。原生命令无完成标记、没有几何变化或无法回读指定半径时均失败；发生变化后尝试撤销并核验原图元，回滚状态在错误详情中返回。无几何变化时不发 U，避免撤销前一次成功操作。包含圆、圆弧或多段线的 pair 操作临时缩放到拾取区域，使用原生按点选取并核对命中句柄；误选其他图元时拒绝执行。完成或失败后恢复视图，按 VIEWCTR、VIEWSIZE、VIEWDIR、TARGET、VIEWTWIST 核验实际画面，不用可能缓存的 COM 视口属性冒充恢复成功。
+操作持有现有 AutoCAD 操作锁，预检后建立独立撤销组，恢复并回读 FILLETRAD、TRIMMODE、OSMODE、CMDECHO 和临时完成标记 USERS5。原生命令无完成标记、没有几何变化或无法回读指定半径时均失败；发生变化后尝试撤销并核验原图元，回滚状态在错误详情中返回。无几何变化时不发 U，避免撤销前一次成功操作。所有 pair 操作（包括两条直线）均临时缩放到拾取区域，避免视图极度缩小时原生命令不产生几何变化；其中包含圆、圆弧或多段线的操作使用原生按点选取并核对命中句柄，误选其他图元时拒绝执行。完成或失败后恢复视图，按 VIEWCTR、VIEWSIZE、VIEWDIR、TARGET、VIEWTWIST 核验实际画面，不用可能缓存的 COM 视口属性冒充恢复成功。
 
 两条直线圆角示例（确认预检后将 `dry_run` 改为 `false`）：
 
