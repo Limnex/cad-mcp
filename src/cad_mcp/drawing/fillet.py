@@ -165,6 +165,8 @@ def _restore_view(backend, saved):
 
 
 def fillet_acad(backend, **arguments):
+    from cad_mcp.core.semantics import TRANSACTION_BACKEND
+    outer_transaction = TRANSACTION_BACKEND.get() is backend
     params = FilletInput.model_validate(arguments)
     backend._check_doc()
     entities = _model_entities(backend)
@@ -201,6 +203,10 @@ def fillet_acad(backend, **arguments):
                 for name in ("FILLETRAD", "TRIMMODE", "OSMODE", "CMDECHO", "USERS5")}
     point_selection = params.mode == "pair" and any(s["type"] != "LINE" for s in before.values())
     saved_view = _view_state(backend) if point_selection else None
+    if outer_transaction:
+        backend._native_rollback_probe = lambda: (
+            all(backend.doc.GetVariable(name) == value for name, value in settings.items())
+            and (saved_view is None or _same_view(_view_state(backend), saved_view)))
     marker = "cadmcp-fillet-" + uuid.uuid4().hex
     tokens = ['"_.FILLET"']
     if params.mode == "polyline":
@@ -239,7 +245,7 @@ def fillet_acad(backend, **arguments):
             f'(setvar "USERS5" (if (vl-catch-all-error-p result) "{marker}:error" "{marker}:done"))) '
             f'(setvar "USERS5" "{marker}:selection_mismatch")) (princ)))\n'
         )
-    started = backend._begin_undo()
+    started = True if outer_transaction else backend._begin_undo()
     if not started:
         raise RuntimeError("无法建立独立圆角撤销组，已停止写入")
     restored = False
@@ -313,12 +319,17 @@ def fillet_acad(backend, **arguments):
                     raise RuntimeError("零半径圆角的两条直线端点未连接")
         restore()
         restored = True
-        backend._commit_undo(started)
+        if not outer_transaction:
+            backend._commit_undo(started)
         return {**result, "applied": True, "verified": True, "after": after,
                 "created": created, "modified_handles": changed, "removed_handles": sorted(removed, key=int),
                 "rounded_arc_count": matched,
                 "verification": "已回读实际变化、标高和圆角半径；整体多段线可能跳过容不下半径的短边"}
     except Exception as exc:
+        if outer_transaction:
+            if not restored:
+                restore()
+            raise
         # A rejected/no-op FILLET must not U the preceding user's operation.
         try:
             no_change = unchanged()

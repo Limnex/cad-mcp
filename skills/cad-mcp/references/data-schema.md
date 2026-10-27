@@ -1,10 +1,12 @@
 # 数据结构与配置
 
-环境工程模型至少应能表达设施、节点、管段、标注、表格和视图，并通过稳定 ID 建立引用关系。工程参数应来自用户资料或已确认的计算结果。
+环境工程模型必须提供 `project_id`、`project_name`；`schema_version` 为 `1.0`，单位为 `mm`。设施使用 `facilities`，节点和管段放入 `network_systems[].nodes`、`network_systems[].segments`，表格使用 `schedules`，视图使用 `views`，通过稳定 ID 建立引用关系。顶层 `nodes`、`pipes`、`tables` 不受支持。工程参数应来自用户资料或已确认的计算结果。
 
 制图配置负责单位、图层、文字样式、标注样式、线型和默认比例；规则集负责外部校核规则；模板清单负责源文件哈希、图块、边界、可用区域、字段锚点和表格区域。
 
 最小模型示例见 [environment-model.json](../examples/environment-model.json)，模板清单示例见 [template-manifest.json](../examples/template-manifest.json)。示例仅展示结构，不代表任何工程参数或规范结论。
+
+将最小模型 JSON 作为 `params.model` 传给 `cad_validate_environment_model`，确认 `ok=true`；再传给 `cad_preview_environment_drawing`（可设 `include_operations=true`），确认校核通过且操作数量大于零。这两步均可离线执行，不要求打开图纸，也不写入 CAD。仓库测试直接通过这两个接口校验示例。
 
 ## DraftingProfile 2.0
 

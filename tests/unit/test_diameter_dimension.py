@@ -188,7 +188,7 @@ def test_diameter_write_participates_in_acad_undo_group(fail):
     if fail:
         with pytest.raises(RuntimeError) as caught:
             proxy.draw_diameter_dimension(0, 0, 30, 40)
-        assert caught.value.rollback_status == "succeeded"
+        assert caught.value.rollback_status == "failed_or_unverified"
     else:
         assert proxy.draw_diameter_dimension(0, 0, 30, 40) == {"diameter": 100}
     assert events == ["acquire", "ready", "begin", "write",

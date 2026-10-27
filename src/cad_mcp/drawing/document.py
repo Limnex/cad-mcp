@@ -11,6 +11,8 @@ CAD 绘图核心库 — 封装 ezdxf，提供 AutoCAD 平面图绘制能力。
 import io
 import hashlib
 import math
+import os
+from uuid import uuid4
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Sequence, Tuple
 
@@ -95,6 +97,42 @@ class CadDocument(DxfDwtMixin):
         self.active_layer: str = LAYER_WALL  # 当前活动图层
         self.active_textstyle: str = "GB"
         self.active_dimstyle: str = "Standard"
+        self._drawings: Dict[str, Dict[str, Any]] = {}
+        self.drawing_id: Optional[str] = None
+
+    _SESSION_FIELDS = ("doc", "msp", "current_path", "active_layer",
+                       "active_textstyle", "active_dimstyle", "_environment_revision")
+
+    def _stash_drawing(self):
+        if self.drawing_id is not None:
+            self._drawings[self.drawing_id] = {
+                name: getattr(self, name, None) for name in self._SESSION_FIELDS}
+
+    @staticmethod
+    def _path_key(path):
+        return os.path.normcase(str(Path(path).resolve()))
+
+    def _opened_at(self, path):
+        self._stash_drawing()
+        key = self._path_key(path)
+        return next((identity for identity, state in self._drawings.items()
+                     if self._path_key(state["current_path"]) == key), None)
+
+    def list_drawings(self):
+        """List retained in-memory drawings without saving any of them."""
+        self._stash_drawing()
+        return [{"drawing_id": identity, "path": str(state["current_path"]),
+                 "active": identity == self.drawing_id, "entity_count": len(state["msp"])}
+                for identity, state in self._drawings.items()]
+
+    def activate_drawing(self, drawing_id):
+        if drawing_id not in self._drawings:
+            raise ValueError("图纸 ID 不存在或已经关闭")
+        self._stash_drawing()
+        self.drawing_id = drawing_id
+        for name, value in self._drawings[drawing_id].items():
+            setattr(self, name, value)
+        return {"drawing_id": drawing_id, "path": str(self.current_path)}
 
     # ---------- 路径安全 ----------
 
@@ -138,6 +176,10 @@ class CadDocument(DxfDwtMixin):
         if template_path:
             raise ValueError("template_path 仅适用于 acad 模式；dxf 模式不能加载 .dwt 模板")
         path = self._safe_path(filename)
+        opened = self._opened_at(path)
+        if opened is not None:
+            return {"message": "已复用打开的图纸，保留未保存修改", "mode": "dxf",
+                    **self.activate_drawing(opened)}
         if path.suffix.lower() != ".dxf":
             path = path.with_suffix(".dxf")
         if path.exists():
@@ -149,17 +191,24 @@ class CadDocument(DxfDwtMixin):
         if "GB" not in doc.styles:
             doc.styles.new("GB", dxfattribs={"font": "gbenor.shx", "bigfont": "gbcbig.shx"})
         doc.header["$TEXTSTYLE"] = "GB"
+        for name, color in LAYER_COLORS.items():
+            if name not in doc.layers:
+                doc.layers.add(name, color=color)
+        # Prepare and persist the new drawing before changing the active session.
+        doc.saveas(path)
+        self._stash_drawing()
+        self.drawing_id = uuid4().hex
+        self._environment_revision = None
         self.doc = doc
         self.msp = doc.modelspace()
         self.current_path = path
         self.active_layer = LAYER_WALL
         self.active_textstyle = "GB"
         self.active_dimstyle = "Standard"
-        for name, color in LAYER_COLORS.items():
-            if name not in doc.layers:
-                doc.layers.add(name, color=color)
-        message = self.save()
+        self._stash_drawing()
+        message = f"已保存: {self.current_path}"
         return {
+            "drawing_id": self.drawing_id,
             "message": message,
             "path": str(self.current_path),
             "mode": "dxf",
@@ -174,12 +223,21 @@ class CadDocument(DxfDwtMixin):
             allowed_suffixes=(".dxf",),
             resolve_filename=self._safe_path,
         )
-        self.doc = ezdxf.readfile(path)
+        opened = self._opened_at(path)
+        if opened is not None:
+            self.activate_drawing(opened)
+            return f"已切换到 {path.name}，保留内存中的 {len(self.msp)} 个图元"
+        doc = ezdxf.readfile(path)
+        self._stash_drawing()
+        self.drawing_id = uuid4().hex
+        self._environment_revision = None
+        self.doc = doc
         self.msp = self.doc.modelspace()
         self.current_path = path
         self.active_layer = self.doc.header.get("$CLAYER", LAYER_WALL)
         self.active_textstyle = self.doc.header.get("$TEXTSTYLE", "GB")
         self.active_dimstyle = self.doc.header.get("$DIMSTYLE", "Standard")
+        self._stash_drawing()
         return f"已打开 {path.name}，共 {len(self.msp)} 个图元"
 
     def save(self) -> str:
@@ -195,12 +253,17 @@ class CadDocument(DxfDwtMixin):
         path = self.current_path
         if save:
             self.save()
+        self._drawings.pop(self.drawing_id, None)
+        self.drawing_id = None
         self.doc = None
         self.msp = None
         self.current_path = None
         self.active_layer = LAYER_WALL
         self.active_textstyle = "GB"
         self.active_dimstyle = "Standard"
+        self._environment_revision = None
+        if self._drawings:
+            self.activate_drawing(next(reversed(self._drawings)))
         action = "已保存并关闭" if save else "已放弃内存修改并关闭"
         return f"{action}: {path}"
 
@@ -208,13 +271,18 @@ class CadDocument(DxfDwtMixin):
         """把当前 DXF 另存到受控图纸目录，不允许静默覆盖。"""
         self._check_doc()
         path = self._safe_path(filename)
+        opened = self._opened_at(path)
+        if opened is not None and opened != self.drawing_id:
+            raise ValueError("目标路径属于另一张打开的图纸，请先关闭该图纸")
         if path.suffix.lower() != ".dxf":
             path = path.with_suffix(".dxf")
         if path.exists() and not overwrite:
             raise FileExistsError(f"目标文件已存在，未覆盖: {path}")
         self.doc.saveas(path)
         self.current_path = path
-        return {"message": f"已另存为: {path}", "path": str(path), "mode": "dxf"}
+        self._stash_drawing()
+        return {"message": f"已另存为: {path}", "path": str(path), "mode": "dxf",
+                "drawing_id": self.drawing_id}
 
     def clone_template_drawing(self, source_path: str, output_filename: str,
                                expected_sha256: Optional[str] = None,

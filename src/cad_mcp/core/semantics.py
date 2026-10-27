@@ -26,6 +26,7 @@ from cad_mcp.core.runtime import CadMcpError, failure_json
 
 
 DIRECT_BACKEND = ContextVar("semantic_transaction_backend", default=None)
+TRANSACTION_BACKEND = ContextVar("drawing_transaction_backend", default=None)
 OBJECT_DICTIONARY = "CAD_MCP_OBJECTS"
 MAX_SCAN_ENTITIES = 100_000
 
@@ -250,6 +251,7 @@ def drawing_transaction(backend):
     marker = None
     marker_name = "CAD_MCP_TXN_" + uuid4().hex
     filename = None
+    transaction_token = None
     active = {name: getattr(backend, name, None) for name in
               ("active_layer", "active_textstyle", "active_dimstyle", "_environment_revision")}
     if acad:
@@ -266,6 +268,7 @@ def drawing_transaction(backend):
             # A guaranteed change in this undo group prevents U on an empty
             # group from accidentally undoing the preceding successful command.
             marker = backend.doc.Dictionaries.Add(marker_name)
+        transaction_token = TRANSACTION_BACKEND.set(backend)
         yield
         if acad:
             marker.Delete()
@@ -276,39 +279,53 @@ def drawing_transaction(backend):
                 backend._commit_undo(started)
                 rolled_back = False
             else:
-                rolled_back = backend._rollback_undo(started)
-                if rolled_back is True:
-                    try:
-                        dictionaries = backend.doc.Dictionaries
-                        marker_gone = _acad_named_item(dictionaries, marker_name) is None
-                        rolled_back = marker_gone and _transaction_state(backend) == before_state
-                    except Exception:
-                        rolled_back = False
-                    probe = getattr(backend, "_layout_rollback_probe", None)
+                try:
+                    undo_reply = backend._rollback_undo(started)
+                except Exception:
+                    undo_reply = False
+                try:
+                    # Verify even if the undo call timed out after taking effect.
+                    if undo_reply is not True:
+                        backend._wait_operation_ready()
+                    dictionaries = backend.doc.Dictionaries
+                    marker_gone = _acad_named_item(dictionaries, marker_name) is None
+                    rolled_back = marker_gone and _transaction_state(backend) == before_state
+                except Exception:
+                    rolled_back = False
+                probes = [getattr(backend, "_layout_rollback_probe", None),
+                          getattr(backend, "_native_rollback_probe", None)]
+                for probe in probes:
                     if probe is not None:
                         try:
-                            rolled_back = rolled_back and bool(probe())
+                            rolled_back = bool(probe()) and rolled_back
                         except Exception:
                             rolled_back = False
             exc.rollback_status = "succeeded" if rolled_back is True else "failed_or_unverified"
         else:
-            snapshot.seek(0)
-            backend.doc = ezdxf.read(snapshot)
-            backend.doc.filename = filename
-            backend.msp = backend.doc.modelspace()
-            for name, value in active.items():
-                if value is not None:
+            try:
+                snapshot.seek(0)
+                backend.doc = ezdxf.read(snapshot)
+                backend.doc.filename = filename
+                backend.msp = backend.doc.modelspace()
+                for name, value in active.items():
                     setattr(backend, name, value)
-            exc.rollback_status = "succeeded"
+                exc.rollback_status = "succeeded"
+            except Exception:
+                exc.rollback_status = "failed_or_unverified"
         raise
     finally:
+        if transaction_token is not None:
+            TRANSACTION_BACKEND.reset(transaction_token)
         if hasattr(backend, "_layout_rollback_probe"):
             delattr(backend, "_layout_rollback_probe")
+        if hasattr(backend, "_native_rollback_probe"):
+            delattr(backend, "_native_rollback_probe")
 
 
 # Every tool is classified before exposing it, including the compact gateway.
 # Future mutating tools fail registration unless deliberately classified here.
-CREATE_TOOLS = {
+TOPOLOGY_TOOLS = {"cad_fillet", "cad_chamfer"}
+CREATE_TOOLS = TOPOLOGY_TOOLS | {
     "cad_draw_mline", "cad_trim", "cad_draw_rectangle", "cad_draw_circle",
     "cad_draw_line", "cad_draw_arc", "cad_draw_polyline", "cad_draw_hatch",
     "cad_fill_closed_boundary_solid", "cad_draw_text", "cad_draw_dimension",
@@ -334,7 +351,9 @@ NON_GEOMETRY_TOOLS = {
     "cad_create_or_update_page_setup", "cad_rename_layer",
     "cad_delete_layer", "cad_delete_layout", "cad_create_or_update_attribute_block",
     "cad_import_block_definitions", "cad_export_block_library", "cad_create_or_update_ctb",
-    "cad_switch_mode", "cad_close_drawing", "cad_quit",
+    "cad_switch_mode", "cad_close_drawing", "cad_quit", "cad_extend",
+    "cad_activate_drawing",
+    "cad_preview_region",
 }
 
 
@@ -364,7 +383,7 @@ def protect_tool(fn, *, read_only, settings, backend):
 
     @wraps(fn)
     def guarded(params):
-        if settings().semantic_policy == "legacy" and name != "cad_register_semantic_object":
+        if settings().semantic_policy == "legacy" and name not in TOPOLOGY_TOOLS | {"cad_register_semantic_object"}:
             return fn(params)
         raw = backend()
         raw = getattr(raw, "_b", raw)
@@ -373,7 +392,18 @@ def protect_tool(fn, *, read_only, settings, backend):
         try:
             binding = getattr(params, "semantic", None)
             preview = getattr(params, "dry_run", False) is True
-            if name in CREATE_TOOLS and binding is None and not (preview and name == "cad_apply_dwt_profile"):
+            source_metadata = {}
+            if name in TOPOLOGY_TOOLS and not preview:
+                if name == "cad_fillet":
+                    selected = params.handles
+                else:
+                    selected = [h for target in params.targets for h in
+                                ([target.handle] if target.mode == "polyline" else
+                                 [target.first.handle, target.second.handle])]
+                # Read and validate below while holding the same operation lock.
+            else:
+                selected = []
+            if name in CREATE_TOOLS - TOPOLOGY_TOOLS and binding is None and not (preview and name == "cad_apply_dwt_profile"):
                 raise semantic_error("严格模式禁止创建没有工程归属和图元作用的图元")
             # Preview is read-only, but must still have valid binding when supplied.
             if getattr(params, "dry_run", False) is True:
@@ -389,12 +419,29 @@ def protect_tool(fn, *, read_only, settings, backend):
                 raw._acquire_autocad_lock()
                 acquired = True
                 raw._wait_operation_ready()
+            before = drawing_entities(raw)
+            if name in TOPOLOGY_TOOLS:
+                for handle in selected:
+                    if handle not in before:
+                        raise semantic_error("选择的图元不在当前图纸中", "NOT_FOUND")
+                    source_metadata[handle] = entity_metadata(raw, before[handle])
+                managed = [data for data in source_metadata.values() if data]
+                identities = {(data.get("project_id"), data.get("semantic_id")) for data in managed}
+                if len(identities) > 1:
+                    raise semantic_error("圆角/倒角跨越多个工程对象，请分开处理", "SEMANTIC_CONFLICT")
+                if binding is None and managed:
+                    data = managed[0]
+                    binding = SemanticBinding(project_id=data["project_id"], object_id=data["semantic_id"],
+                                              role=data["role"], view_id=data.get("view_id"))
+                if binding is None and settings().semantic_policy != "legacy":
+                    raise semantic_error("圆角/倒角需要已登记的工程归属")
+                if binding is not None and identities and identities != {(binding.project_id, binding.object_id)}:
+                    raise semantic_error("指定工程归属与原图元不一致", "SEMANTIC_CONFLICT")
             obj = None
             if binding is not None:
                 obj = read_object(raw, binding.project_id, binding.object_id)
                 if obj is None:
                     raise semantic_error(f"工程对象 {binding.object_id} 尚未登记", "SEMANTIC_NOT_FOUND")
-            before = drawing_entities(raw)
             token = DIRECT_BACKEND.set(raw)
             with drawing_transaction(raw):
                 result = fn(params)
@@ -406,7 +453,7 @@ def protect_tool(fn, *, read_only, settings, backend):
                     raise _FailedResult(result)
                 after = drawing_entities(raw)
                 new_handles = [h for h in after if h not in before]
-                if name in CREATE_TOOLS:
+                if name in CREATE_TOOLS and binding is not None:
                     operation = CadOperation(
                         kind=name, semantic_id=binding.object_id, role=binding.role,
                         view_id=binding.view_id,
@@ -419,6 +466,19 @@ def protect_tool(fn, *, read_only, settings, backend):
                         metadata["materialized_hash"] = raw._entity_state_hash(after[handle])
                         raw.set_entity_metadata(handle, metadata)
                         _verify_metadata(raw, handle, metadata, after[handle])
+                    if name in TOPOLOGY_TOOLS:
+                        for handle, data in source_metadata.items():
+                            if data and handle in after:
+                                data = {**data, "materialized_hash": raw._entity_state_hash(after[handle])}
+                                raw.set_entity_metadata(handle, data)
+                                _verify_metadata(raw, handle, data, after[handle])
+                        uids = [data.get("entity_uid") for entity in after.values()
+                                if (data := entity_metadata(raw, entity)) and data.get("entity_uid")]
+                        if len(uids) != len(set(uids)):
+                            raise semantic_error("修改后的图纸存在重复身份", "SEMANTIC_VERIFY_FAILED")
+                elif name in TOPOLOGY_TOOLS:
+                    # Legacy, entirely unmanaged input has no engineering identity to inherit.
+                    pass
                 else:
                     for handle in new_handles:
                         data = entity_metadata(raw, after[handle])
@@ -431,7 +491,14 @@ def protect_tool(fn, *, read_only, settings, backend):
                 raw._semantic_write_blocked = True
             if isinstance(exc, _FailedResult):
                 payload = json.loads(exc.result)
-                payload["semantic_rollback_status"] = getattr(exc, "rollback_status", "not_started")
+                status = getattr(exc, "rollback_status", "not_started")
+                payload["semantic_rollback_status"] = status
+                detail = payload.setdefault("error_detail", {})
+                detail.setdefault("details", {})["rollback_status"] = status
+                if status == "succeeded" and detail.get("code") == "EXECUTION_UNKNOWN":
+                    detail.update(code="OPERATION_ROLLED_BACK", retryable=False, hint="本次操作已核对并撤销，未保存")
+                    detail["details"]["write_result_unknown"] = False
+                    payload["error"] = "本次操作失败，已核对并撤销修改"
                 return canonical_json(payload)
             return failure_json(exc, name)
         finally:

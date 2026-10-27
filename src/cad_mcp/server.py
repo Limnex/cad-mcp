@@ -36,7 +36,7 @@ from cad_mcp.drawing.document import (
     LAYER_FILL,
 )
 from cad_mcp.drawing.entity_properties import EntityPropertyPatch
-from cad_mcp.drawing.fillet import FilletInput
+from cad_mcp.drawing.fillet import FilletInput as NativeFilletInput
 from cad_mcp.drawing.chamfer import ChamferRequest
 from cad_mcp.drawing.native_extend import validate_request as validate_extend_request
 from cad_mcp.core.geometry import (
@@ -79,6 +79,7 @@ from cad_mcp.core.validation import validate_model
 from cad_mcp.core.runtime import (
     UnsupportedModeError, failure_json, setup_logging, success_json,
 )
+from cad_mcp.core.write_safety import protect_writes
 
 _RULE_SETS: Dict[str, RuleSet] = {}
 _DRAFTING_PROFILES: Dict[str, AnyDraftingProfile] = {}
@@ -167,6 +168,8 @@ def _tool(*args, **kwargs):
         guarded = protect_tool(
             fn, read_only=kwargs.get("annotations", {}).get("readOnlyHint") is True,
             settings=lambda: _SETTINGS, backend=lambda: _get_backend())
+        if kwargs.get("annotations", {}).get("readOnlyHint") is not True:
+            guarded = protect_writes(guarded, lambda: _get_backend())
         return mcp.tool(*args, **kwargs)(guarded)
     return decorate
 
@@ -230,12 +233,16 @@ class _AcadLockProxy:
                     self._b._commit_undo(undo_started)
                     return result
                 except Exception as exc:
-                    rolled_back = self._b._rollback_undo(undo_started)
+                    try:
+                        self._b._rollback_undo(undo_started)
+                    except Exception:
+                        pass
                     if undo_started:
                         try:
-                            exc.rollback_status = (
-                                "succeeded" if rolled_back is True else "failed_or_unverified"
-                            )
+                            # U returning normally is not a state comparison.
+                            # Verified transactions own their snapshot outside
+                            # this compatibility proxy; other failures stop writes.
+                            exc.rollback_status = "failed_or_unverified"
                         except Exception:
                             pass
                     raise
@@ -299,6 +306,10 @@ class SemanticToolInput(ToolInput):
         default=None, description="严格模式必填：已登记对象的 project_id、object_id、role，可选 view_id；绘制与身份绑定同时完成")
 
 
+class FilletInput(SemanticToolInput, NativeFilletInput):
+    """Native request with server-owned semantic binding."""
+
+
 # ================= 工具：局部图像预览 =================
 
 class PreviewRegionInput(ToolInput):
@@ -317,7 +328,7 @@ class PreviewRegionInput(ToolInput):
         return self
 
 
-@mcp.tool(name="cad_preview_region", structured_output=False,
+@_tool(name="cad_preview_region", structured_output=False,
           annotations={"title": "局部图像预览", "readOnlyHint": False,
                        "destructiveHint": False, "idempotentHint": False,
                        "openWorldHint": False})
@@ -422,7 +433,10 @@ def cad_open_drawing(params: OpenDrawingInput) -> str:
         str: JSON，含图元数量。
     """
     try:
-        return _ok({"ok": True, "message": _get_backend().open_drawing(params.filename)})
+        backend = _get_backend()
+        message = backend.open_drawing(params.filename)
+        return _ok({"ok": True, "message": message,
+                    "drawing_id": getattr(_raw_backend(backend), "drawing_id", None)})
     except Exception as e:
         return _fail(e)
 
@@ -581,7 +595,7 @@ def cad_trim(params: TrimInput) -> str:
         return _fail(e)
 
 
-@mcp.tool(
+@_tool(
     name="cad_fillet",
     annotations={
         "title": "原生圆角",
@@ -603,7 +617,7 @@ def cad_fillet(params: FilletInput) -> str:
         backend = _get_backend()
         if _backend_mode(backend) != "acad":
             raise ValueError("请先切换到 acad 模式并打开目标图纸")
-        return _ok({"ok": True, **backend.fillet(**params.model_dump())})
+        return _ok({"ok": True, **backend.fillet(**params.model_dump(exclude={"semantic"}))})
     except Exception as e:
         return _fail(e)
 
@@ -622,7 +636,7 @@ class ExtendInput(ToolInput):
         return self
 
 
-@mcp.tool(
+@_tool(
     name="cad_extend",
     annotations={
         "title": "原生延伸图元",
@@ -2335,11 +2349,11 @@ def cad_draw_centerline(params: DrawCenterlineInput) -> str:
         return _fail(e)
 
 
-class ChamferInput(ToolInput, ChamferRequest):
+class ChamferInput(SemanticToolInput, ChamferRequest):
     """Native CHAMFER request; nested models also forbid unknown fields."""
 
 
-@mcp.tool(
+@_tool(
     name="cad_chamfer",
     annotations={"title": "CAD 原生倒角", "readOnlyHint": False,
                  "destructiveHint": True, "idempotentHint": False, "openWorldHint": False},
@@ -2354,7 +2368,7 @@ def cad_chamfer(params: ChamferInput) -> str:
     不保存图纸。当前支持 WCS XY 平行平面，二维多段线法向为 +Z；最多 20 组。
     """
     try:
-        return _ok({"ok": True, **_get_backend().chamfer(params.model_dump())})
+        return _ok({"ok": True, **_get_backend().chamfer(params.model_dump(exclude={"semantic"}))})
     except Exception as e:
         return _fail(e)
 
@@ -3897,6 +3911,39 @@ def cad_switch_mode(params: SwitchModeInput) -> str:
 
 
 # ================= 工具：生命周期 =================
+
+class ListDrawingsInput(ToolInput):
+    pass
+
+
+class ActivateDrawingInput(ToolInput):
+    drawing_id: str = Field(min_length=1, max_length=120, description="cad_list_drawings 返回的 DXF 图纸 ID")
+
+
+@_tool(name="cad_list_drawings", annotations={"title": "列出 DXF 会话图纸", "readOnlyHint": True,
+       "destructiveHint": False, "idempotentHint": True, "openWorldHint": False})
+def cad_list_drawings(params: ListDrawingsInput) -> str:
+    """列出 DXF 内存会话，包括未保存内容的图纸 ID；不会保存图纸。"""
+    try:
+        backend = _get_backend()
+        if _backend_mode(backend) != "dxf":
+            raise UnsupportedModeError("会话图纸列表当前仅支持 DXF 模式")
+        return _ok({"ok": True, "drawings": backend.list_drawings()})
+    except Exception as exc:
+        return _fail(exc)
+
+
+@_tool(name="cad_activate_drawing", annotations={"title": "切换 DXF 会话图纸", "readOnlyHint": False,
+       "destructiveHint": False, "idempotentHint": True, "openWorldHint": False})
+def cad_activate_drawing(params: ActivateDrawingInput) -> str:
+    """按图纸 ID 切换；每张图纸独立保留未保存内容及活动样式。后续工具操作该图纸。"""
+    try:
+        backend = _get_backend()
+        if _backend_mode(backend) != "dxf":
+            raise UnsupportedModeError("图纸 ID 切换当前仅支持 DXF 模式")
+        return _ok({"ok": True, **backend.activate_drawing(params.drawing_id)})
+    except Exception as exc:
+        return _fail(exc)
 
 class CloseDrawingInput(ToolInput):
     model_config = ConfigDict(str_strip_whitespace=True)

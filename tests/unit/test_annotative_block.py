@@ -117,7 +117,8 @@ def test_acad_annotative_readback_failure_triggers_proxy_rollback(tmp_path) -> N
         server._AcadLockProxy(backend).make_block("ANNO", ["10"], annotative=True)
 
     assert rollback == [True]
-    assert failure.value.rollback_status == "succeeded"
+    # A boolean undo reply alone cannot prove that geometry/XData were restored.
+    assert failure.value.rollback_status == "failed_or_unverified"
 
 
 def test_lisp_string_escapes_untrusted_name() -> None:
@@ -310,4 +311,4 @@ def test_acad_annotative_attribute_mismatch_rolls_back(tmp_path) -> None:
             "ANNOTATED", [0, 0, 0], [str(int(source.Handle, 16))],
             [{"tag": "VALUE"}], annotative=True)
     assert rollback == [True]
-    assert failure.value.rollback_status == "succeeded"
+    assert failure.value.rollback_status == "failed_or_unverified"

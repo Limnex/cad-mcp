@@ -39,7 +39,7 @@ def test_preview_image_and_path_cross_production_stdio(tmp_path, toolset):
                 assert drawn["ok"]
                 region = {"x_min": 0, "y_min": 0, "x_max": 10, "y_max": 10, "width": 256, "height": 256}
                 response, payload = await call("cad_preview_region", region)
-                assert payload["ok"] and payload["image_included"]
+                assert payload["ok"] and payload["image_included"], payload
                 path = Path(payload["image_path"])
                 assert path.is_absolute() and path.parent.parent == tmp_path / "images"
                 assert isinstance(response.content[1], ImageContent)
@@ -54,7 +54,7 @@ def test_preview_image_and_path_cross_production_stdio(tmp_path, toolset):
                 assert len(entities["entities"]) == 1
                 _, health = await call("cad_health", {})
                 assert health["document_open"]
-                assert health["tool_count"] == (114 if toolset == "all" else 3)
+                assert health["tool_count"] == (116 if toolset == "all" else 3)
                 assert health["worker"]["generation"] == 1
                 assert not health["worker"]["write_result_unknown"]
 

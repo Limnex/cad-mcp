@@ -80,7 +80,7 @@ def test_stdio_initialize_and_tool_list(tmp_path):
 
     assert initialize["result"]["serverInfo"]["name"] == "cad_mcp"
     assert initialize["result"]["protocolVersion"] == "2024-11-05"
-    assert len(names) == 114
+    assert len(names) == 116
     assert {
         "cad_health",
         "cad_extend",

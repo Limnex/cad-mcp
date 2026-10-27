@@ -8,6 +8,101 @@ from cad_mcp.drawing.autocad import AcadBackend, _ComRetryProxy
 from cad_mcp.server import _AcadLockProxy
 
 
+def _timeout_application():
+    from types import SimpleNamespace
+    document = SimpleNamespace(GetVariable=lambda name: 0)
+    return SimpleNamespace(GetAcadState=lambda: SimpleNamespace(IsQuiescent=True), ActiveDocument=document)
+
+
+@pytest.mark.parametrize("hresult", [-2147417825, -2147417848, -2147023174])
+def test_write_timeout_after_side_effect_is_not_replayed(monkeypatch, hresult):
+    from cad_mcp.core.runtime import CadMcpError
+    calls = []
+    class Target:
+        Application = _timeout_application()
+        def Mutate(self):
+            calls.append("applied")
+            raise pythoncom.com_error(hresult, "transport uncertainty", None, None)
+    with pytest.raises(CadMcpError) as error:
+        _ComRetryProxy(Target()).Mutate()
+    assert error.value.code == "EXECUTION_UNKNOWN" and not error.value.retryable
+    assert calls == ["applied"]
+
+
+def test_property_write_timeout_verifies_completed_assignment():
+    class Target:
+        Application = _timeout_application()
+        calls = 0
+        @property
+        def Radius(self):
+            return self._radius
+        @Radius.setter
+        def Radius(self, value):
+            self.calls += 1
+            self._radius = value
+            raise pythoncom.com_error(-2147417825, "timeout", None, None)
+    target = Target()
+    _ComRetryProxy(target).Radius = 9
+    assert target.Radius == 9 and target.calls == 1
+
+
+def test_system_variable_timeout_verifies_completed_assignment():
+    class Target:
+        Application = _timeout_application()
+        calls = 0
+        def SetVariable(self, name, value):
+            self.calls += 1
+            self.value = value
+            raise pythoncom.com_error(-2147417825, "timeout", None, None)
+        def GetVariable(self, name):
+            return self.value
+    target = Target()
+    assert _ComRetryProxy(target).SetVariable("FILLETRAD", 9) is None
+    assert target.calls == 1 and target.value == 9
+
+
+@pytest.mark.parametrize("partial", [False, True])
+def test_add_line_timeout_reconciles_exactly_one_matching_entity(partial):
+    from types import SimpleNamespace
+    from cad_mcp.core.runtime import CadMcpError
+    class Target:
+        Application = _timeout_application()
+        def __init__(self):
+            self.items, self.calls = [], 0
+        @property
+        def Count(self):
+            return len(self.items)
+        def Item(self, index):
+            return self.items[index]
+        def AddLine(self, start, end):
+            self.calls += 1
+            self.items.append(SimpleNamespace(Handle="A", ObjectName="AcDbLine",
+                StartPoint=start, EndPoint=(0, 0, 0) if partial else end))
+            raise pythoncom.com_error(-2147417825, "timeout", None, None)
+    target = Target()
+    start, end = cad_acad._pt(0, 0, 0), cad_acad._pt(10, 0, 0)
+    if partial:
+        with pytest.raises(CadMcpError):
+            _ComRetryProxy(target).AddLine(start, end)
+    else:
+        result = _ComRetryProxy(target).AddLine(start, end)
+        assert result.Handle == "A"
+    assert target.calls == 1 and len(target.items) == 1
+
+
+def test_read_timeout_still_has_bounded_retry(monkeypatch):
+    monkeypatch.setattr(cad_acad.time, "sleep", lambda seconds: None)
+    class Target:
+        calls = 0
+        def GetVariable(self, name):
+            self.calls += 1
+            if self.calls == 1:
+                raise pythoncom.com_error(-2147417825, "timeout", None, None)
+            return 42
+    target = Target()
+    assert _ComRetryProxy(target).GetVariable("FILLETRAD") == 42 and target.calls == 2
+
+
 class _BusyPropertyTarget:
     def __init__(self):
         self.attempts = 0

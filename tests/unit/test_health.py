@@ -64,5 +64,5 @@ def test_cad_health_tool_reports_registered_tool_count(monkeypatch, tmp_path):
     result = json.loads(server.cad_health(server.HealthInput(reconnect=False)))
 
     assert result["ok"] is True
-    assert result["tool_count"] == 114
+    assert result["tool_count"] == 116
     assert result["server"]["version"] == "1.5.3"

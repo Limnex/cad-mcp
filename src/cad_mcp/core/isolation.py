@@ -16,6 +16,7 @@ import uuid
 
 from cad_mcp.core.runtime import CadMcpError, failure_json, health_metadata, success_json
 from cad_mcp.core.tool_results import decode_tool_result
+from cad_mcp.core.write_safety import uncertain_tool_result
 
 
 # Only full sheet workflows need repeated block/native/rollback inspection.
@@ -250,13 +251,9 @@ class ToolProcessSupervisor:
                 raise RuntimeError("工作进程退出或通信失效")
             result = decode_tool_result(response["result"])
             self._accept_state(response["state"])
-            # Native EXTEND can report an uncertain write while its worker is
-            # responsive. Keep this new result handling scoped to that tool.
-            if target == "cad_extend":
-                outcome = json.loads(result)
-                if (isinstance(outcome, dict) and outcome.get("ok") is False
-                        and outcome.get("error_detail", {}).get("code") == "EXECUTION_UNKNOWN"):
-                    self._write_unknown = True
+            if ((write and uncertain_tool_result(result))
+                    or response["state"].get("write_result_unknown")):
+                self._write_unknown = True
             if target in {"cad_open_drawing", "cad_new_drawing"} and self._state["document_open"]:
                 try:
                     if json.loads(result).get("ok") is True:

@@ -227,6 +227,25 @@ def test_verified_native_write_restores_settings(native_mock):
     assert variables == original and len(objects) == 3
 
 
+def test_native_chamfer_joins_outer_transaction_without_nested_undo(native_mock):
+    from cad_mcp.core.semantics import TRANSACTION_BACKEND
+    backend, objects, events, variables, original = native_mock
+    backend._undo_mark_open = True
+    variables["UNDOCTL"] |= 8
+    original = variables.copy()
+    token = TRANSACTION_BACKEND.set(backend)
+    try:
+        result = backend.chamfer(payload(distance2=3, dry_run=False))
+        assert result["verified"] and variables == original and len(objects) == 3
+        assert "begin" not in events
+        assert not any(isinstance(event, tuple) and event[0] in {"commit", "rollback"} for event in events)
+        assert backend._native_rollback_probe()
+        variables["OSMODE"] += 1
+        assert not backend._native_rollback_probe()
+    finally:
+        TRANSACTION_BACKEND.reset(token)
+
+
 def test_command_without_geometry_is_failure_and_verified_rollback(native_mock):
     backend, objects, events, variables, original = native_mock
     backend._send_command_and_wait = lambda cmd: events.append(("no-op", cmd))

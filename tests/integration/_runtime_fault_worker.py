@@ -234,6 +234,23 @@ def isolated_fault_worker(kind, directory):
     serve(server)
 
 
+def rollback_unknown_worker(directory):
+    from cad_mcp.worker import serve
+    from cad_mcp.core.runtime import failure_json
+    raw = server._backend
+    raw.new_drawing("uncertain.dxf")
+    def failed(params):
+        with (directory / "simulated-actions").open("a", encoding="utf-8") as stream:
+            stream.write("applied\n")
+        exc = RuntimeError("simulated rollback uncertainty")
+        exc.rollback_status = "failed_or_unverified"
+        return failure_json(exc, "cad_fillet")
+    for name in ("cad_fillet", "cad_chamfer", "cad_draw_line"):
+        tool = server._FULL_TOOL_REGISTRY[name]
+        tool.fn, tool.is_async = failed, False
+    serve(server)
+
+
 SERVICE_CODE = """
 import json, os, sys
 print('ready', flush=True)
@@ -333,6 +350,8 @@ if __name__ == "__main__":
         hanging_scenario(directory, serve=True)
     elif scenario in {"isolated-write-hang-worker", "isolated-write-crash-worker", "isolated-read-crash-worker"}:
         isolated_fault_worker(scenario, directory)
+    elif scenario == "isolated-rollback-unknown-worker":
+        rollback_unknown_worker(directory)
     elif scenario == "hang":
         hanging_scenario(directory)
     else:

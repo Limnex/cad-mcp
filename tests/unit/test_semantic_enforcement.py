@@ -234,6 +234,91 @@ def test_every_creation_tool_advertises_semantic_binding():
         assert "semantic" in model.model_fields, name
 
 
+@pytest.mark.parametrize("tool", ["fillet", "chamfer"])
+@pytest.mark.parametrize("policy", ["strict", "legacy"])
+@pytest.mark.parametrize("identity_failure", [False, True])
+def test_topology_tools_share_identity_transaction(strict, monkeypatch, tool, policy, identity_failure):
+    from cad_mcp.core.semantics import TRANSACTION_BACKEND, _transaction_state
+    cad = _AcadDouble()
+    monkeypatch.setattr(server, "_backend", cad)
+    monkeypatch.setattr(server, "_backend_mode", lambda backend: "acad")
+    register()
+    first, second = draw(binding())["handle"], draw(binding())["handle"]
+    original_state = _transaction_state(cad)
+    original_starts = cad.starts
+    original_metadata = copy.deepcopy(cad.doc.Layouts.Item(0).Block.items[first].metadata)
+    def native(*args, **kwargs):
+        assert TRANSACTION_BACKEND.get() is cad
+        block = cad.doc.Layouts.Item(0).Block
+        source = block.items[first]
+        added = _Circle(999, 5, 5, 2)
+        added.metadata = copy.deepcopy(source.metadata)  # Native XData inheritance.
+        source.Radius += 1
+        block.items["999"] = added
+        return {"applied": True, "verified": True}
+    monkeypatch.setattr(cad, tool, native, raising=False)
+    monkeypatch.setattr(server, "_SETTINGS", replace(server._SETTINGS, semantic_policy=policy))
+    if identity_failure:
+        cad.fail_metadata = True
+    if tool == "fillet":
+        params = server.FilletInput(handles=[first, second], pick_points=[(0, 0, 0), (1, 1, 0)], radius=2, dry_run=False)
+        result = json.loads(server.cad_fillet(params))
+    else:
+        params = server.ChamferInput(targets=[{"mode": "pair", "first": {"handle": first, "point": [0, 0, 0]},
+            "second": {"handle": second, "point": [1, 1, 0]}}], distance1=2, dry_run=False)
+        result = json.loads(server.cad_chamfer(params))
+    assert cad.starts == original_starts + 1 and cad.lock_depth == 0
+    if identity_failure:
+        assert not result["ok"] and _transaction_state(cad) == original_state
+        assert not getattr(cad, "_semantic_write_blocked", False)
+    else:
+        assert result["ok"], result
+        block = cad.doc.Layouts.Item(0).Block
+        source, added = block.items[first].metadata, block.items["999"].metadata
+        assert added["entity_uid"] != source["entity_uid"] == original_metadata["entity_uid"]
+        assert source["materialized_hash"] != original_metadata["materialized_hash"]
+        assert (added["project_id"], added["semantic_id"]) == (source["project_id"], source["semantic_id"])
+
+
+@pytest.mark.parametrize("reported", ["false", "exception"])
+def test_actual_restored_state_is_verified_after_uncertain_undo_reply(strict, monkeypatch, reported):
+    from cad_mcp.core.write_safety import block_error, mark_unknown_write
+    cad = _AcadDouble()
+    monkeypatch.setattr(server, "_backend", cad)
+    register()
+    original_rollback = cad._rollback_undo
+    def rollback(started):
+        original_rollback(started)
+        if reported == "exception":
+            raise RuntimeError("undo completed but reply failed")
+        return False
+    def fail(*args, **kwargs):
+        mark_unknown_write()
+        raise block_error()
+    monkeypatch.setattr(cad, "_rollback_undo", rollback)
+    monkeypatch.setattr(cad, "draw_circle", fail)
+    result = draw(binding())
+    assert not result["ok"]
+    assert result["error_detail"]["details"]["rollback_status"] == "succeeded", result
+    assert not getattr(cad, "_semantic_write_blocked", False)
+
+
+def test_native_setting_probe_failure_blocks_even_when_geometry_was_restored(strict, monkeypatch):
+    cad = _AcadDouble()
+    monkeypatch.setattr(server, "_backend", cad)
+    monkeypatch.setattr(server, "_backend_mode", lambda backend: "acad")
+    register()
+    first, second = draw(binding())["handle"], draw(binding())["handle"]
+    def native(**kwargs):
+        cad._native_rollback_probe = lambda: False
+        raise RuntimeError("native settings could not be restored")
+    monkeypatch.setattr(cad, "fillet", native, raising=False)
+    result = json.loads(server.cad_fillet(server.FilletInput(handles=[first, second],
+        pick_points=[(0, 0, 0), (1, 1, 0)], radius=2, dry_run=False)))
+    assert not result["ok"] and cad._semantic_write_blocked
+    assert result["error_detail"]["details"]["rollback_status"] == "failed_or_unverified"
+
+
 def test_returned_backend_failure_restores_geometry_and_registration(strict, monkeypatch):
     register()
     before = set(drawing_entities(strict))
@@ -345,6 +430,7 @@ class _AcadDouble:
     _handle_str = staticmethod(lambda value: str(int(value, 16)))
     _xdata_chunks = staticmethod(AcadBackend._xdata_chunks)
     _entity_state_hash = AcadBackend._entity_state_hash
+    _com_state_value = staticmethod(AcadBackend._com_state_value)
 
     def __init__(self):
         block = _Collection()

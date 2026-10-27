@@ -212,7 +212,7 @@ def test_profile_apply_failure_is_rolled_back_by_one_proxy_undo_group():
         _AcadLockProxy(Backend()).apply_dwt_profile()
 
     assert events == ["acquire", "ready", "begin", "apply", ("rollback", True), "release"]
-    assert caught.value.rollback_status == "succeeded"
+    assert caught.value.rollback_status == "failed_or_unverified"
 
 
 def test_destructive_dry_run_skips_undo_group():

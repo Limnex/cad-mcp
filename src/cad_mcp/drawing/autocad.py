@@ -172,11 +172,10 @@ _LOCK_MUTEX = None
 
 
 # AutoCAD COM 服务器忙时返回的 HRESULT（32 位无符号值）：
-#   RPC_E_SERVERCALL_REJECTED    0x80010001 调用被拒绝
-#   RPC_E_CALL_REJECTED          0x80010108 服务器正忙，拒绝接收呼叫
+#   RPC_E_CALL_REJECTED          0x80010001 调用被拒绝
 #   RPC_E_SERVERCALL_RETRYLATER  0x8001010A 服务器忙，稍后重试
 #   RPC_E_TIMEOUT                0x8001011F 调用超时
-_RETRY_HRESULTS = {0x80010001, 0x80010108, 0x8001010A, 0x8001011F}
+_RETRY_HRESULTS = {0x80010001, 0x8001010A, 0x8001011F}
 
 # A cooperative deadline bounds the whole scan, including individual COM retries.
 # It cannot interrupt a single native COM call that never returns.
@@ -199,7 +198,7 @@ def _raise_scan_transport_error(exc: Exception) -> None:
     if isinstance(exc, pythoncom.com_error):
         hr = getattr(exc, "hresult", None)
         if hr is not None and (hr & 0xFFFFFFFF) in (
-            _RETRY_HRESULTS | {0x800706BA, 0x800401FD}
+            _RETRY_HRESULTS | {0x80010108, 0x800706BA, 0x800401FD}
         ):
             raise exc
 
@@ -267,11 +266,18 @@ class _ComRetryProxy:
     """
 
     _retryable_hr = _RETRY_HRESULTS
+    _READ_METHODS = {"Item", "GetVariable", "GetAcadState", "GetBoundingBox", "GetXData",
+                     "GetXRecordData", "GetAttributes", "GetConstantAttributes", "GetBulge",
+                     "GetWidth", "GetDynamicBlockProperties", "HandleToObject", "ObjectIDToObject",
+                     "TranslateCoordinates", "GetTypeInfo", "GetTypeAttr", "GetIDsOfNames",
+                     "GetName", "GetPaperSize", "GetPaperMargins", "GetWindowToPlot",
+                     "GetCustomScale", "GetPlotDeviceNames", "GetCanonicalMediaNames",
+                     "GetPlotStyleTableNames", "GetLocaleMediaName"}
 
     def __init__(self, obj):
         object.__setattr__(self, "_obj", obj)
 
-    def _retry(self, fn):
+    def _retry(self, fn, *, read_only=True, reconcile=None):
         """执行 COM 操作（方法调用或属性读取），AutoCAD 忙时等待并重试。"""
         for attempt in range(8):
             _check_com_scan_deadline()
@@ -281,6 +287,18 @@ class _ComRetryProxy:
                 return result
             except pythoncom.com_error as e:
                 hr = getattr(e, "hresult", None)
+                if hr is not None and (hr & 0xFFFFFFFF) in {0x8001011F, 0x80010108, 0x800706BA, 0x800401FD} and not read_only:
+                    if reconcile is not None:
+                        try:
+                            self._wait_after_timeout()
+                            confirmed, result = reconcile()
+                            if confirmed:
+                                return result
+                        except Exception:
+                            pass
+                    from cad_mcp.core.write_safety import block_error, mark_unknown_write
+                    mark_unknown_write()
+                    raise block_error() from e
                 if hr is not None and (hr & 0xFFFFFFFF) in self._retryable_hr:
                     try:
                         pythoncom.PumpWaitingMessages()
@@ -313,7 +331,7 @@ class _ComRetryProxy:
             return _ComRetryProxy(attr)
         if callable(attr):
             def wrapper(*args, **kwargs):
-                return self._call(attr, *args, **kwargs)
+                return self._call(attr, *args, _member_name=name, **kwargs)
             return wrapper
         return attr
 
@@ -322,7 +340,74 @@ class _ComRetryProxy:
         if isinstance(value, _ComRetryProxy):
             value = object.__getattribute__(value, "_obj")
         obj = object.__getattribute__(self, "_obj")
-        self._retry(lambda: setattr(obj, name, value))
+        self._retry(lambda: setattr(obj, name, value), read_only=False,
+                    reconcile=lambda: (self._same_value(getattr(obj, name), value), None))
+
+    def _wait_after_timeout(self):
+        """Only verify a postcondition after CAD has finished the command."""
+        obj = object.__getattribute__(self, "_obj")
+        application = getattr(obj, "Application", None)
+        document = getattr(obj, "Document", None)
+        if application is None and document is not None:
+            application = document.Application
+        if application is None:
+            raise RuntimeError("无法确认 CAD 命令是否结束")
+        app = _ComRetryProxy(application)
+        for _ in range(20):
+            pythoncom.PumpWaitingMessages()
+            if app.GetAcadState().IsQuiescent:
+                doc = document or getattr(application, "ActiveDocument", None)
+                if doc is None or int(_ComRetryProxy(doc).GetVariable("CMDACTIVE")) == 0:
+                    return
+            time.sleep(0.1)
+        raise RuntimeError("超时后 CAD 仍未结束命令")
+
+    @staticmethod
+    def _same_value(actual, expected):
+        if isinstance(actual, win32com.client.VARIANT):
+            actual = actual.value
+        if isinstance(expected, win32com.client.VARIANT):
+            expected = expected.value
+        if isinstance(actual, (tuple, list)) and isinstance(expected, (tuple, list)):
+            return len(actual) == len(expected) and all(
+                _ComRetryProxy._same_value(a, b) for a, b in zip(actual, expected))
+        if isinstance(actual, (int, float)) and isinstance(expected, (int, float)):
+            return math.isclose(actual, expected, rel_tol=1e-10, abs_tol=1e-9)
+        return actual == expected
+
+    def _method_reconciler(self, name, args):
+        obj = object.__getattribute__(self, "_obj")
+        if name == "SetVariable" and len(args) == 2:
+            return lambda: (self._same_value(_ComRetryProxy(obj).GetVariable(args[0]), args[1]), None)
+        geometry = {"AddLine": ("AcDbLine", ("StartPoint", "EndPoint")),
+                    "AddCircle": ("AcDbCircle", ("Center", "Radius")),
+                    "AddArc": ("AcDbArc", ("Center", "Radius", "StartAngle", "EndAngle"))}
+        if name not in geometry or len(args) != len(geometry[name][1]):
+            return None
+        collection = _ComRetryProxy(obj)
+        try:
+            count = int(collection.Count)
+            if count > MAX_DRAWING_SCAN_ENTITIES:
+                return None
+            # Add* appends one entity. Keep normal creation O(1); only inspect
+            # the appended entity if the actual call times out.
+            previous = str(collection.Item(count - 1).Handle) if count else None
+            before_count = count
+        except Exception:
+            return None
+
+        def reconcile():
+            count = int(collection.Count)
+            if count != before_count + 1:
+                return False, None
+            if before_count and str(collection.Item(before_count - 1).Handle) != previous:
+                return False, None
+            entity = collection.Item(before_count)
+            kind, fields = geometry[name]
+            verified = str(entity.ObjectName) == kind and all(
+                self._same_value(getattr(entity, field), value) for field, value in zip(fields, args))
+            return verified, self._unwrap(entity)
+        return reconcile
 
     @staticmethod
     def _unwrap(value):
@@ -332,10 +417,13 @@ class _ComRetryProxy:
     def __repr__(self):
         return f"<ComRetryProxy {object.__getattribute__(self, '_obj')!r}>"
 
-    def _call(self, fn, *args, **kwargs):
+    def _call(self, fn, *args, _member_name=None, **kwargs):
         args = tuple(self._unwrap(a) for a in args)
         kwargs = {k: self._unwrap(v) for k, v in kwargs.items()}
-        ret = self._retry(lambda: fn(*args, **kwargs))
+        name = _member_name or getattr(fn, "__name__", "")
+        read_only = name in self._READ_METHODS
+        reconcile = None if read_only or kwargs else self._method_reconciler(name, args)
+        ret = self._retry(lambda: fn(*args, **kwargs), read_only=read_only, reconcile=reconcile)
         if _is_com_object(ret):
             return _ComRetryProxy(ret)
         return ret

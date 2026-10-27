@@ -392,6 +392,8 @@ def _restore_variables(doc, variables):
 
 
 def chamfer(backend, payload):
+    from cad_mcp.core.semantics import TRANSACTION_BACKEND
+    outer_transaction = TRANSACTION_BACKEND.get() is backend
     request = ChamferRequest.model_validate(payload)
     backend._check_doc()
     doc, msp = fresh_com(backend.doc), fresh_com(backend.msp)
@@ -449,11 +451,21 @@ def chamfer(backend, payload):
     if request.dry_run or not changes:
         return {**result, "verified": not request.dry_run}
     undo_control = int(doc.GetVariable("UNDOCTL"))
-    if not undo_control & 1 or undo_control & 8 or backend._undo_mark_open:
+    if not undo_control & 1 or ((undo_control & 8 or backend._undo_mark_open) and not outer_transaction):
         raise ValueError("倒角需要启用撤销且没有嵌套撤销组；未执行写入")
     variables = {name: doc.GetVariable(name) for name in
                  ("CHAMFERA", "CHAMFERB", "CHAMFERC", "CHAMFERD", "CHAMMODE", "TRIMMODE", "OSMODE")}
-    started = backend._begin_undo()
+    if outer_transaction:
+        def restored_state():
+            if view is not None:
+                from cad_mcp.drawing.autocad import _pt
+                center = doc.Utility.TranslateCoordinates(_pt(*doc.GetVariable("VIEWCTR")), 1, 0, False)
+                if not _close(view[0], _point(center)) or not math.isclose(
+                        view[1], float(doc.GetVariable("VIEWSIZE")), rel_tol=1e-10, abs_tol=TOL):
+                    return False
+            return all(doc.GetVariable(name) == value for name, value in variables.items())
+        backend._native_rollback_probe = restored_state
+    started = True if outer_transaction else backend._begin_undo()
     if not started:
         raise RuntimeError("未能建立独立倒角撤销组，未执行写入")
     try:
@@ -512,10 +524,13 @@ def chamfer(backend, payload):
             finally:
                 restore_view()
         actual = {h: _read(doc, msp, h) for h in original}
-        backend._commit_undo(started)
+        if not outer_transaction:
+            backend._commit_undo(started)
         return {**result, "applied": True, "verified": True,
                 "after": actual}
     except Exception as exc:
+        if outer_transaction:
+            raise
         rolled_back = backend._rollback_undo(started)
         verified = False
         if rolled_back is True:

@@ -1,14 +1,29 @@
 {
+  "schema_version": "1.0",
+  "project_id": "example_project",
+  "project_name": "最小离线预览示例",
+  "units": "mm",
+  "revision": "1",
   "facilities": [
-    {"id": "tank_01", "type": "tank", "geometry": {"kind": "rectangle", "width": 1000, "height": 600}}
+    {"id": "tank_01", "name": "示例池体", "facility_type": "tank",
+     "origin": [0, 0], "outline": {"shape": "rectangle", "length": 1000, "width": 600}}
   ],
-  "nodes": [
-    {"id": "outlet_01", "type": "outlet", "position": [1200, 300]}
-  ],
-  "pipes": [
-    {"id": "pipe_01", "from": "tank_01", "to": "outlet_01", "diameter": 100}
+  "network_systems": [
+    {"id": "network_01", "name": "示例连接", "medium": "示例介质",
+     "nodes": [
+       {"id": "inlet_01", "point": [1000, 300]},
+       {"id": "outlet_01", "point": [1200, 300]}
+     ],
+     "segments": [
+       {"id": "pipe_01", "start_node": "inlet_01", "end_node": "outlet_01",
+        "path": [[1000, 300], [1200, 300]], "section": {"diameter": 100}}
+     ]}
   ],
   "annotations": [],
-  "tables": [],
-  "views": []
+  "schedules": [],
+  "views": [
+    {"id": "plan_01", "name": "示例平面", "view_type": "plan", "scale_denominator": 100,
+     "facility_ids": ["tank_01"], "network_system_ids": ["network_01"]}
+  ],
+  "metadata": {"purpose": "仅用于结构校验和离线预览，尺寸不代表工程设计参数"}
 }

@@ -157,8 +157,10 @@ def test_dry_run_has_zero_writes_and_does_not_claim_geometric_success(tmp_path):
 def test_native_pair_readback_settings_and_operation_lock(tmp_path, monkeypatch):
     backend, items, calls, variables, initial = backend_fixture(tmp_path, round_lines)
     monkeypatch.setattr(server, "_backend", server._AcadLockProxy(backend))
-    response = json.loads(server.cad_fillet(FilletInput(**PAIR, dry_run=False)))
-    assert response["ok"] and response["applied"] and response["verified"]
+    # Native geometry/locking fixture; public transactions are tested with
+    # complete dictionaries and layouts in test_semantic_enforcement.
+    response = server._backend.fillet(**PAIR, dry_run=False)
+    assert response["applied"] and response["verified"]
     assert response["rounded_arc_count"] == 1
     assert response["created"][0]["handle"] == "12"
     assert response["modified_handles"] == ["10", "11"]
@@ -171,6 +173,21 @@ def test_native_pair_readback_settings_and_operation_lock(tmp_path, monkeypatch)
     assert '(handent "A") (trans (list 8 0 0) 0 1)' in commands[0]
     assert '(handent "B") (trans (list 0 8 0) 0 1)' in commands[0]
     assert "_Polyline" not in commands[0]
+
+
+def test_native_fillet_joins_outer_transaction_without_nested_undo(tmp_path):
+    from cad_mcp.core.semantics import TRANSACTION_BACKEND
+    backend, _, calls, variables, initial = backend_fixture(tmp_path, round_lines)
+    token = TRANSACTION_BACKEND.set(backend)
+    try:
+        result = backend.fillet(**PAIR, dry_run=False)
+        assert result["verified"] and variables == initial
+        assert not any(c[0] in {"begin", "commit", "rollback"} for c in calls)
+        assert backend._native_rollback_probe()
+        variables["OSMODE"] += 1
+        assert not backend._native_rollback_probe()
+    finally:
+        TRANSACTION_BACKEND.reset(token)
 
 
 def test_no_trim_retains_sources(tmp_path):

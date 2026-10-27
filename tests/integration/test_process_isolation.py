@@ -56,6 +56,40 @@ def test_default_worker_preserves_dxf_document_state_between_requests(monkeypatc
     assert process.poll() is not None
 
 
+@pytest.mark.parametrize("target,params", [
+    ("cad_fillet", {"handles": ["10", "11"], "pick_points": [[0, 0, 0], [1, 1, 0]], "radius": 2, "dry_run": False}),
+    ("cad_chamfer", {"targets": [{"mode": "polyline", "handle": "10"}], "distance1": 2, "dry_run": False}),
+    ("cad_draw_line", {"x1": 0, "y1": 0, "x2": 1, "y2": 1}),
+])
+@pytest.mark.parametrize("gateway", [False, True])
+def test_any_returned_rollback_uncertainty_blocks_supervisor(monkeypatch, tmp_path, target, params, gateway):
+    configure_environment(monkeypatch, tmp_path)
+    monkeypatch.setenv("CAD_SEMANTIC_POLICY", "legacy")
+    monkeypatch.setenv("CAD_MCP_TOOLSET", "webcodex" if gateway else "all")
+    supervisor = fake_supervisor("isolated-rollback-unknown-worker", tmp_path)
+    arguments = {"params": params}
+    name = target
+    if gateway:
+        name = "cad_gateway_call"
+        arguments = {"params": {"tool_name": target, "arguments": arguments}}
+    try:
+        result = json.loads(supervisor.call(name, arguments, target_name=target, write=True))
+        assert not result["ok"] and supervisor._write_unknown, result
+        for blocked in ("cad_save_drawing", "cad_close_drawing", "cad_quit", "cad_draw_line"):
+            with pytest.raises(CadMcpError) as error:
+                supervisor.call(blocked, {"params": {}}, write=True)
+            assert error.value.code == "EXECUTION_UNKNOWN"
+        assert (tmp_path / "simulated-actions").read_text(encoding="utf-8") == "applied\n"
+        if gateway:
+            info = supervisor.call("cad_gateway_call", {"params": {"tool_name": "cad_get_drawing_info",
+                "arguments": {"params": {}}}}, target_name="cad_get_drawing_info")
+        else:
+            info = supervisor.call("cad_get_drawing_info", {"params": {}})
+        assert "uncertain.dxf" in info
+    finally:
+        supervisor.close()
+
+
 def test_default_worker_keeps_loaded_rules_and_rejects_invalid_parameters(monkeypatch, tmp_path):
     configure_environment(monkeypatch, tmp_path)
     rules = tmp_path / "rules.json"

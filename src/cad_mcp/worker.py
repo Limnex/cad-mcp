@@ -18,6 +18,7 @@ def _snapshot(server):
         "mode": server._backend_mode(server._backend),
         "document_open": getattr(raw, "doc", None) is not None,
         "file": str(path) if path is not None else None,
+        "write_result_unknown": bool(getattr(raw, "_semantic_write_blocked", False)),
     }
 
 

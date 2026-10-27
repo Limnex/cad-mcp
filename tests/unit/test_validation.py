@@ -17,7 +17,7 @@ def test_all_tool_input_models_use_strict_base():
         and issubclass(value, server.ToolInput)
     ]
 
-    assert len(input_models) == 115
+    assert len(input_models) == 118
     assert all(model.model_config.get("extra") == "forbid" for model in input_models)
     assert all(model.model_config.get("allow_inf_nan") is False for model in input_models)
 

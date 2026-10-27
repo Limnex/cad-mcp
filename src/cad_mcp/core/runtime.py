@@ -17,7 +17,7 @@ import threading
 import uuid
 from typing import Any, Dict, Mapping, Optional, Tuple
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from cad_mcp.config import load_settings
 
@@ -26,7 +26,7 @@ SERVER_NAME = "cad_mcp"
 SERVER_VERSION = "1.5.3"
 LOG_MAX_BYTES = 2 * 1024 * 1024
 LOG_BACKUP_COUNT = 2
-_RETRYABLE_COM_HRESULTS = {0x80010001, 0x80010108, 0x8001010A, 0x8001011F}
+_RETRYABLE_COM_HRESULTS = {0x80010001, 0x8001010A, 0x8001011F}
 
 _LOGGER = logging.getLogger(SERVER_NAME)
 _LOGGER_LOCK = threading.Lock()
@@ -132,7 +132,7 @@ def setup_logging(
             file_handler.setFormatter(formatter)
             _LOGGER.addHandler(file_handler)
         except OSError as exc:
-            _LOGGER.warning("file_logging_unavailable error=%s", exc)
+            _LOGGER.warning("file_logging_unavailable exception_type=%s", type(exc).__name__)
 
         setattr(_LOGGER, "_cad_configured", True)
         return _LOGGER
@@ -154,6 +154,15 @@ def get_recent_error_id() -> Optional[str]:
 
 
 def _classify_error(exc: Exception) -> Tuple[str, bool, str]:
+    cause = exc
+    seen = set()
+    while cause is not None and id(cause) not in seen:
+        seen.add(id(cause))
+        if isinstance(cause, CadMcpError) and cause.code == "EXECUTION_UNKNOWN":
+            if getattr(exc, "rollback_status", None) == "succeeded":
+                return "OPERATION_ROLLED_BACK", False, "本次操作已撤销，未保存"
+            return cause.code, False, cause.hint
+        cause = cause.__cause__ or cause.__context__
     message = str(exc).lower()
     class_name = type(exc).__name__.lower()
 
@@ -208,14 +217,41 @@ def record_error(exc: Exception, operation: str) -> Dict[str, Any]:
     code, retryable, hint = _classify_error(exc)
     with _ERROR_LOCK:
         _RECENT_ERROR_ID = error_id
+    server = sys.modules.get("cad_mcp.server")
+    known_operations = getattr(server, "_FULL_TOOL_REGISTRY", {})
+    log_operation = (operation if operation in known_operations or operation in {
+        "acad_rollback_undo", "cad_health_probe", "_gateway_call", "_gateway_describe"
+    } else "unknown_operation")
+    # Never format exceptions or traceback source lines: both can contain inputs.
+    locations = []
+    tb = exc.__traceback__
+    while tb is not None:
+        locations.append({"module": Path(tb.tb_frame.f_code.co_filename).name,
+                          "function": tb.tb_frame.f_code.co_name, "line": tb.tb_lineno})
+        tb = tb.tb_next
+    known_fields = set()
+    pending = list(BaseModel.__subclasses__()) if isinstance(exc, ValidationError) else []
+    visited = set()
+    while pending:
+        model = pending.pop()
+        if model in visited:
+            continue
+        visited.add(model)
+        known_fields.update(model.model_fields)
+        pending.extend(model.__subclasses__())
+    fields = ([{"type": item["type"], "loc": [part if isinstance(part, int) or part in known_fields else "<key>"
+                                               for part in item["loc"]]}
+               for item in exc.errors(include_url=False, include_context=False, include_input=False)]
+              if isinstance(exc, ValidationError) else [])
     _LOGGER.error(
-        "operation_failed request_id=%s operation=%s code=%s retryable=%s error=%s",
+        "operation_failed request_id=%s operation=%s code=%s retryable=%s exception_type=%s fields=%s stack=%s",
         error_id,
-        operation,
+        log_operation,
         code,
         retryable,
-        exc,
-        exc_info=(type(exc), exc, exc.__traceback__),
+        type(exc).__name__,
+        json.dumps(fields),
+        json.dumps(locations),
     )
     result = {
         "code": code,
