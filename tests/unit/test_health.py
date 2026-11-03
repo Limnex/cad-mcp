@@ -12,7 +12,7 @@ def test_dxf_health_reports_runtime_and_capabilities(tmp_path):
     assert status["connected"] is True
     assert status["document_state"] == "closed"
     assert status["server"]["name"] == "cad_mcp"
-    assert status["server"]["version"] == "1.5.3"
+    assert status["server"]["version"] == "1.6.0"
     assert status["python"]["version"]
     assert status["capabilities"]["native_format"] == "dxf"
     assert status["capabilities"]["transaction"] == "memory_snapshot"
@@ -65,4 +65,4 @@ def test_cad_health_tool_reports_registered_tool_count(monkeypatch, tmp_path):
 
     assert result["ok"] is True
     assert result["tool_count"] == 116
-    assert result["server"]["version"] == "1.5.3"
+    assert result["server"]["version"] == "1.6.0"

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.6.0 - 2026-11-03
+
 - Retain independent DXF drawing sessions and active styles with `cad_list_drawings` / `cad_activate_drawing`; reuse the same open path and require explicit save/discard on close.
 - Guard all public mutations after unknown writes or unverified rollback in both semantic policies. Reconcile supported COM writes after timeout instead of replaying them; include native fillet/chamfer in strict identity transactions and allocate unique identities to new entities.
 - Redact validation exceptions and stack metadata from controlled logs; refresh the environment model example and verify it through public validation/preview calls.

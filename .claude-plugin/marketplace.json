@@ -8,7 +8,7 @@
       "name": "cad-mcp",
       "source": "./",
       "description": "Create, inspect, and modify DXF and AutoCAD drawings through a local MCP server.",
-      "version": "1.5.3",
+      "version": "1.6.0",
       "author": {
         "name": "CAD MCP Contributors"
       }
